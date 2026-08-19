@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- README "Available tools" section: merged the area-summary table and
+  the per-tool description table into a single `Area | Tool |
+  Description` table, one row per tool (43 total), area shown only once
+  per group of consecutive same-area rows rather than repeated or
+  tracked via footnote markers. The `†`/`*` footnote system is gone --
+  "Disabled by default" and "Requires user confirmation before it does
+  anything" are now stated directly in each affected tool's own
+  description text instead.
 - New README "Known issues" section: `stop_node` (and anything requiring
   a node to be stopped first) can persistently fail on certain nodes with
   `"Request not valid (60027)."`, with no fix found yet despite extensive

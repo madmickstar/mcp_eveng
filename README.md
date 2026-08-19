@@ -197,66 +197,56 @@ Tool names have no prefix (`get_status`, not `eveng_get_status`) — be aware
 this means a name could collide with another MCP server's tool if you ever
 connect more than one server with overlapping names to the same client.
 
-| Area | Tools |
-| --- | --- |
-| System | `get_status`, `list_node_templates`, `get_node_template`, `list_network_types`, `list_user_roles`† |
-| Server introspection | `list_tools` |
-| Folders | `list_folder`, `add_folder`, `move_folder`, `delete_folder`* |
-| Users | `list_users`†, `get_user`†, `add_user`†, `edit_user`†, `delete_user`*† |
-| Labs | `get_lab`, `open_lab`, `create_lab`, `edit_lab`, `share_lab`, `move_lab`, `delete_lab`*, `get_lab_topology`, `get_lab_links`, `list_lab_pictures`, `list_labs` |
-| Networks | `list_lab_networks`, `add_lab_network`, `edit_lab_network`, `delete_lab_network`* |
-| Nodes | `list_lab_nodes`, `add_lab_node`, `edit_lab_node`, `change_node_delay`, `edit_lab_nodes_by_template`, `delete_lab_node`*, `get_node_interfaces`, `connect_interface`, `start_node`, `stop_node`, `wipe_node`, `export_node` |
-| Live console access | `telnet_node` |
+| Area | Tool | Description |
+| --- | --- | --- |
+| System | `get_status` | Reports EVE-NG server status and version. |
+| | `list_node_templates` | Lists available node templates. |
+| | `get_node_template` | Gets details for a single node template, including its images. |
+| | `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). |
+| | `list_user_roles` | Lists available user roles. Disabled by default. |
+| Server introspection | `list_tools` | Lists the tools published by the MCP server. |
+| Folders | `list_folder` | Lists the contents of a folder. |
+| | `add_folder` | Creates a new folder. |
+| | `move_folder` | Moves or renames a folder. |
+| | `delete_folder` | Deletes a folder. Requires user confirmation before it does anything. |
+| Users | `list_users` | Lists user accounts. Disabled by default. |
+| | `get_user` | Gets details for a single user. Disabled by default. |
+| | `add_user` | Creates a new user account. Disabled by default. |
+| | `edit_user` | Edits an existing user account. Disabled by default. |
+| | `delete_user` | Deletes a user account. Requires user confirmation before it does anything. Disabled by default. |
+| Labs | `get_lab` | Gets metadata for a lab. |
+| | `open_lab` | Looks up a lab and reports its lock status. |
+| | `create_lab` | Creates a new lab. |
+| | `edit_lab` | Edits a lab's metadata. |
+| | `share_lab` | Shares a lab with one or more users. |
+| | `move_lab` | Moves a lab to a different folder. |
+| | `delete_lab` | Deletes a lab. Requires user confirmation before it does anything. |
+| | `get_lab_topology` | Gets a lab's node/network topology. |
+| | `get_lab_links` | Gets a lab's link (interface) mappings. |
+| | `list_lab_pictures` | Lists background pictures placed in a lab. |
+| | `list_labs` | Recursively lists every lab under a folder. |
+| Networks | `list_lab_networks` | Lists networks in a lab. |
+| | `add_lab_network` | Adds a network to a lab. |
+| | `edit_lab_network` | Edits an existing network. |
+| | `delete_lab_network` | Deletes a network. Requires user confirmation before it does anything. |
+| Nodes | `list_lab_nodes` | Lists nodes in a lab. |
+| | `add_lab_node` | Adds a node to a lab. |
+| | `edit_lab_node` | Edits an existing node. |
+| | `change_node_delay` | Changes a node's startup delay, one node or in bulk. |
+| | `edit_lab_nodes_by_template` | Bulk-edits interfaces/cpu/memory/icon/image across nodes sharing a template. |
+| | `delete_lab_node` | Deletes a node. Requires user confirmation before it does anything. |
+| | `get_node_interfaces` | Gets a node's interfaces and what they're wired to. |
+| | `connect_interface` | Wires a node's interface to another node or to a network. |
+| | `start_node` | Starts a node, or every node in a lab. |
+| | `stop_node` | Stops a node, or every node in a lab. |
+| | `wipe_node` | Wipes a node's saved configuration. |
+| | `export_node` | Exports a node's running configuration. |
+| Live console access | `telnet_node` | Sends CLI commands to a running node's console over telnet. |
 
-\* Requires user confirmation before it does anything — see below.
-
-† Disabled by default — see "Controlling which tools are exposed" below.
-
-| Tool | Description |
-| --- | --- |
-| `get_status` | Reports EVE-NG server status and version. |
-| `list_node_templates` | Lists available node templates. |
-| `get_node_template` | Gets details for a single node template, including its images. |
-| `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). |
-| `list_user_roles` | Lists available user roles. |
-| `list_tools` | Lists the tools published by the MCP server. |
-| `list_folder` | Lists the contents of a folder. |
-| `add_folder` | Creates a new folder. |
-| `move_folder` | Moves or renames a folder. |
-| `delete_folder` | Deletes a folder. |
-| `list_users` | Lists user accounts. |
-| `get_user` | Gets details for a single user. |
-| `add_user` | Creates a new user account. |
-| `edit_user` | Edits an existing user account. |
-| `delete_user` | Deletes a user account. |
-| `get_lab` | Gets metadata for a lab. |
-| `open_lab` | Looks up a lab and reports its lock status. |
-| `create_lab` | Creates a new lab. |
-| `edit_lab` | Edits a lab's metadata. |
-| `share_lab` | Shares a lab with one or more users. |
-| `move_lab` | Moves a lab to a different folder. |
-| `delete_lab` | Deletes a lab. |
-| `get_lab_topology` | Gets a lab's node/network topology. |
-| `get_lab_links` | Gets a lab's link (interface) mappings. |
-| `list_lab_pictures` | Lists background pictures placed in a lab. |
-| `list_labs` | Recursively lists every lab under a folder. |
-| `list_lab_networks` | Lists networks in a lab. |
-| `add_lab_network` | Adds a network to a lab. |
-| `edit_lab_network` | Edits an existing network. |
-| `delete_lab_network` | Deletes a network. |
-| `list_lab_nodes` | Lists nodes in a lab. |
-| `add_lab_node` | Adds a node to a lab. |
-| `edit_lab_node` | Edits an existing node. |
-| `change_node_delay` | Changes a node's startup delay, one node or in bulk. |
-| `edit_lab_nodes_by_template` | Bulk-edits interfaces/cpu/memory/icon/image across nodes sharing a template. |
-| `delete_lab_node` | Deletes a node. |
-| `get_node_interfaces` | Gets a node's interfaces and what they're wired to. |
-| `connect_interface` | Wires a node's interface to another node or to a network. |
-| `start_node` | Starts a node, or every node in a lab. |
-| `stop_node` | Stops a node, or every node in a lab. |
-| `wipe_node` | Wipes a node's saved configuration. |
-| `export_node` | Exports a node's running configuration. |
-| `telnet_node` | Sends CLI commands to a running node's console over telnet. |
+"Disabled by default" tools: see "Controlling which tools are exposed"
+below for how to turn them on. "Requires user confirmation" tools: see
+`docs/tools-reference.md` for the search → select → confirm flow they
+each go through before anything is deleted.
 
 More detailed information about each tool — confirmed EVE-NG quirks,
 design reasoning, and non-obvious behavior — can be found in
