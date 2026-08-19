@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- Added a table of contents at the top of the README, covering every `##`
+  through `####` heading. Every anchor link verified against GitHub's own
+  slug algorithm (lowercase, strip punctuation except `-`/`_`, spaces to
+  hyphens, no collapsing of resulting repeated hyphens) rather than
+  assumed correct by eye -- the trickiest one, "MCP network settings
+  (only used with `--sse` or `--http`)", resolves to three consecutive
+  hyphens twice (`...with---sse-or---http`) from the literal `--` in the
+  heading text combined with the space-to-hyphen conversion.
 - README "Available tools" section: merged the area-summary table and
   the per-tool description table into a single `Area | Tool |
   Description` table, one row per tool (43 total), area shown only once

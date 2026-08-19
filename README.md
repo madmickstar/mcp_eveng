@@ -6,6 +6,28 @@ clients (Claude Desktop, Claude Code, or any other MCP host) drive an
 add/wire nodes and networks, start/stop/wipe devices, and browse templates,
 folders and users — all through the EVENG REST API.
 
+## Table of contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Choosing a transport](#choosing-a-transport)
+- [A note on sessions and relogin](#a-note-on-sessions-and-relogin)
+- [Configuration](#configuration)
+  - [EVENG connection](#eveng-connection-always-used-regardless-of-transport)
+  - [MCP network settings](#mcp-network-settings-only-used-with---sse-or---http)
+    - [`MCP_LOG_LEVEL`](#mcp_log_level-options-and-where-logs-go)
+    - [`MCP_ALLOWED_HOSTS`](#mcp_allowed_hosts-dns-rebinding-protection)
+    - [`MCP_STATEFUL`](#mcp_stateful-session-persistence-across-restarts)
+- [Available tools](#available-tools)
+- [Controlling which tools are exposed](#controlling-which-tools-are-exposed)
+- [Project layout](#project-layout)
+- [Troubleshooting](#troubleshooting)
+- [Known issues](#known-issues)
+- [Development](#development)
+  - [Why `mcp` is pinned below `2.0`](#why-mcp-is-pinned-below-20)
+- [Publishing to PyPI](#publishing-to-pypi)
+- [License](#license)
+
 ## Features
 
 - Full coverage of the documented EVENG REST API: auth, system status, node
