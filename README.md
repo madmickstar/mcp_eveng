@@ -376,51 +376,11 @@ changed slightly; it's safe to ignore either way.
 
 ## Known issues
 
-**`stop_node` (and anything that requires stopping a node first —
+`stop_node` (and anything that requires stopping a node first —
 `edit_lab_node`, `change_node_delay`, `edit_lab_nodes_by_template`,
 `connect_interface` on Community edition) can fail persistently on
-certain nodes with `"Request not valid (60027)."`**, with no way found
-so far to make that specific node stoppable again through the API.
-
-What's confirmed about this, from extensive live investigation:
-
-- **Not a session/auth issue** — distinct from the session-invalidation
-  problem described above ("A note on sessions and relogin"), which *is*
-  fixed. A completely fresh, never-before-used session fails identically
-  and immediately.
-- **Not related to node history** — reproduces on a brand-new node in a
-  brand-new lab that was only ever started and left idle; heavy prior
-  interaction isn't a prerequisite.
-- **Not a resource-exhaustion issue** — confirmed on a server with ample
-  spare CPU/RAM/disk.
-- **Not the `EVENG_HTML5` login mode** — `-1` (auto), `0`, and `1` all
-  reproduce the identical failure.
-- **Not fixed by `unl_wrapper -a fixpermissions`** — EVE-NG's own
-  documented general-purpose remediation command for this class of
-  symptom; tried live, no change.
-- **The request never reaches EVE-NG's own stop wrapper script at all.**
-  Confirmed by tailing `/opt/unetlab/data/Logs/unl_wrapper.txt` server-side
-  during a failing request — nothing is written for it, while a
-  successful stop (e.g. via the GUI) does log a `unl_wrapper -a stop`
-  invocation. Whatever rejects the request happens earlier, at EVE-NG's
-  PHP application layer, before it ever shells out to actually stop
-  anything at the OS/hypervisor level.
-- **The request itself is structurally correct** — endpoint path, HTTP
-  method, and payload all match EVE-NG's own official API documentation
-  exactly.
-
-**Not yet tried**: `unl_wrapper -a restoredb` (EVE-NG's documented fix for
-a crashed login database, notably attributed to improper suspend/shutdown
-— a more invasive step, restarts MySQL, requires shell access some
-deployments won't have); a byte-for-byte comparison between a manual
-`curl` stop request and what this client sends, to rule out anything at
-the wire level (headers, cookie encoding) not visible in the JSON
-exchanged; and confirming whether the EVE-NG GUI can stop the *same*,
-already-API-confirmed-stuck node, to isolate whether this is specific to
-API-originated requests or the node's state itself regardless of source.
-
-If you hit this and find a fix, please open an issue or PR — this section
-should be updated with whatever the actual resolution turns out to be.
+certain nodes with `"Request not valid (60027)."`, with no way found so
+far to make that specific node stoppable again through the API.
 
 ## Development
 

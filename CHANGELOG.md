@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- Trimmed the README "Known issues" section down to just the core
+  symptom statement -- the extensive supporting detail (what's been
+  ruled out, what's untried, log evidence) was too much for that section
+  and has been removed rather than relocated; the git history retains it
+  if it's ever needed again.
 - Added a table of contents at the top of the README, covering every `##`
   through `####` heading. Every anchor link verified against GitHub's own
   slug algorithm (lowercase, strip punctuation except `-`/`_`, spaces to
