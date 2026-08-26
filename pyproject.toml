@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-eveng"
+version = "0.2.1"
+description = "Model Context Protocol (MCP) server for automating EVENG network emulator labs"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "mcp_eveng", email = "mcp_eveng@users.noreply.github.com" },
+]
+keywords = ["mcp", "model-context-protocol", "eveng", "network-automation", "llm-tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+# NOTE on the `mcp` pin: the MCP Python SDK released a v2.0.0 line on
+# 2026-07-28 that is a deliberate breaking rework (FastMCP -> MCPServer,
+# new import paths, stateless transports). v1.x remains the maintained,
+# production-recommended line, so we pin below 2.0 on purpose. Bump this
+# intentionally (and re-test transports) when migrating to v2.
+dependencies = [
+    "mcp[cli]>=1.23.0,<2.0.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "python-dotenv>=1.0.1",
+    "anyio>=4.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-httpx>=0.35",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "build>=1.2",
+    "twine>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/madmickstar/mcp_eveng"
+Repository = "https://github.com/madmickstar/mcp_eveng"
+Issues = "https://github.com/madmickstar/mcp_eveng/issues"
+Changelog = "https://github.com/madmickstar/mcp_eveng/blob/main/CHANGELOG.md"
+
+[project.scripts]
+mcp-eveng = "mcp_eveng.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_eveng"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --cov=mcp_eveng --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/mcp_eveng"]
+branch = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
