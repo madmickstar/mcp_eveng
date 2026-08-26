@@ -75,6 +75,13 @@ Both cover cloning and installing, choosing a transport (`stdio` /
 `--sse` / `--http`), and the exact Claude Desktop / Claude Code JSON
 configuration for stdio and streamable-http.
 
+PRO/Corporate only, and a substantially bigger setup than anything
+else in this project: **[Capture relay guide](docs/capture-relay.md)**
+-- streams an EVE-NG PRO Wireshark capture to a local Wireshark without
+a personal SSH+sudo account on the EVE-NG host. Implemented and
+unit-tested but not yet verified against a live server -- see the
+guide's status note before relying on it.
+
 ## Choosing a transport
 
 Transport is a **CLI flag**, not an environment variable: no flag runs
@@ -139,7 +146,7 @@ every edition-aware behavior below derives from (`edition.is_pro_edition`).
 An unrecognized or missing version string is treated as Community, the
 more conservative assumption.
 
-Three tools genuinely behave differently by edition — confirmed against
+Five tools genuinely behave differently by edition — confirmed against
 EVE-NG's own official [features-compare page](https://www.eve-ng.net/index.php/features-compare/),
 live testing, or both:
 
@@ -177,12 +184,21 @@ live testing, or both:
   server's own GUI network traffic, not inferred. One confirmed
   restriction: a side attached to a network of any kind (not just a
   literal bridge) can't have its quality set at all — EVE-NG forces it
-  to 0 regardless of what's requested. One open gap: there's no known
-  way to read a connection's *current* quality values via the API, and
-  the endpoint always overwrites both sides' complete state in one
-  request — so this tool requires the far side's current values to be
-  supplied explicitly whenever that side is another node, rather than
-  risk silently resetting them.
+  to 0 regardless of what's requested. The far side's current values are
+  read automatically from `get_lab_topology` (confirmed live that a PRO
+  server's response includes them) rather than needing to be supplied
+  explicitly.
+- **`list_captures`/`get_capture`**: EVE-NG PRO forces Wireshark captures
+  into an embedded Guacamole session rather than Community's
+  browser-protocol-handler handoff to a local Wireshark. These tools
+  (plus a standalone relay service and a Windows `.bat` companion) let a
+  PRO capture stream to a local Wireshark without a personal SSH+sudo
+  account on the EVE-NG host — PRO/Corporate only, no Community
+  equivalent needed, and disabled by default even on PRO until the
+  supporting infrastructure is set up. See
+  [docs/capture-relay.md](docs/capture-relay.md) for the full
+  architecture and setup — and its status note, since this hasn't been
+  verified against a live server yet.
 
 The six user-management tools (`list_users`, `get_user`, `add_user`,
 `edit_user`, `delete_user`, `list_user_roles`) are **not** edition-gated —

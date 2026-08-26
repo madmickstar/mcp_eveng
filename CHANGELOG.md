@@ -83,6 +83,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at all.
 
 ### Added
+- **`list_captures`/`get_capture`: new PRO/Corporate-only tools, plus a
+  standalone `mcp-eveng-capture-relay` systemd service and a Windows
+  `.bat` companion, for streaming an EVE-NG PRO Wireshark capture to a
+  local Wireshark without a personal SSH+sudo account on the EVE-NG
+  host.** Confirmed live that capturing can't be automated end-to-end --
+  each capture container's lifetime is tied to a heartbeat from the
+  browser tab that started it (refreshing the page kills captures off
+  one by one, on each one's own staggered idle timer, not all at once),
+  so the person still starts captures from the GUI same as today. Also
+  confirmed live that a container's name (`Capture-nnnnnnn`) is PID-like,
+  not derived from node id or interface, so there's no automatic
+  node/interface -> container correlation -- `list_captures` shows
+  what's running (container, age, status, oldest-first) for a person to
+  recognize by when they started it, and `get_capture` mints a one-time
+  `capture://` URL from a position in that list (or an exact container
+  name/id).
+  New `capture_relay` package: `tokens.py` (self-contained, HMAC-signed
+  tokens -- the main process and the relay run as fully independent
+  systemd services with no shared runtime state, so a token has to be
+  verifiable without either process calling the other or consulting
+  shared storage), `docker_ps.py` (parses a machine-readable `docker ps
+  --format` request rather than the human table, filtered by
+  `ancestor=eve-wireshark`), `config.py` (SSH identity shared by both
+  processes; separate listen vs. advertise address for the relay, since
+  a bind address like `0.0.0.0` is meaningless as something a client
+  connects *to*), `ssh_client.py` (thin `asyncssh` wrapper), `url.py`
+  (builds/parses the `mode=pro` `capture://` URL -- deliberately
+  distinct from Community's own unmodified `capture://` link shape,
+  which carries no `mode` at all and needs no MCP involvement), and
+  `server.py` (the relay itself -- Starlette, already a transitive
+  dependency via `mcp[cli]`'s own `--http` transport, so no new
+  framework). New `asyncssh`/`starlette`/`uvicorn` optional dependencies
+  (`capture-relay` extra), new `mcp-eveng-capture-relay` console script.
+  New `docs/capture-relay.md` (SSH/sudoers setup for two
+  separately-scoped service accounts, the systemd unit, every env var)
+  and `scripts/eve-capture.bat` (the Windows companion registered
+  against `capture://`, dispatching Community's existing behavior
+  unmodified vs. this project's new curl-relay-primary/plink-fallback
+  PRO path).
+  **Status: 59 new tests, all passing (tokens, docker ps parsing, config,
+  URL building, the relay's token/streaming/disconnect logic against a
+  fake SSH process, and the MCP tools against a fake SSH runner) -- but
+  the actual `asyncssh` connections and the `.bat` file itself are
+  unverified against any live EVE-NG server or Windows machine.**
+  Developed on its own branch (`feature/capture-relay`); shipped
+  disabled by default in both `tools.env.*.example` files even on PRO,
+  since it depends on infrastructure (the SSH accounts, the relay
+  service) that doesn't exist until deliberately set up.
 - **`set_link_quality`: new PRO/Corporate-only tool for per-connection
   link quality (delay/jitter/packet loss/bandwidth), set independently on
   each side of a connection.** No Community equivalent exists at all
@@ -116,8 +164,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the unmodified project).
 
 ### Documentation
-- **Corrected false PyPI-install framing in the README and Linux/Windows
-  install guides** -- this project is not published on PyPI, but
+- **README**: added a doc link and PRO/Community bullet for the new
+  capture-relay feature (see the `### Added` entry above); also fixed
+  two things noticed stale while in there -- the "Three tools genuinely
+  behave differently by edition" count (already wrong before this
+  session; four were listed, now five with capture-relay added) and
+  `set_link_quality`'s own bullet, which still described the "far side
+  values must be supplied explicitly" limitation that was actually
+  fixed earlier in this same `[Unreleased]` section (see the `### Fixed`
+  entry above) but never reflected in the README's own description.
+- Corrected false PyPI-install framing in the README and Linux/Windows
+  install guides -- this project is not published on PyPI, but
   `docs/install-linux.md`'s "Install" section (and the main README's)
   presented `pip install mcp-eveng` as the primary/first install method,
   which doesn't currently work at all. Both now lead with the actual
