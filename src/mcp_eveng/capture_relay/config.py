@@ -24,6 +24,8 @@ the API user OS-level access it has no business having.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -107,3 +109,18 @@ class CaptureURLSettings(BaseSettings):
         ..., description="Hostname/IP the .bat connects to for streaming -- not the bind address."
     )
     advertise_port: int = Field(default=8001)
+
+
+@lru_cache
+def get_capture_ssh_settings() -> CaptureSSHSettings:
+    return CaptureSSHSettings()  # type: ignore[call-arg]
+
+
+@lru_cache
+def get_relay_listen_settings() -> RelayListenSettings:
+    return RelayListenSettings()  # type: ignore[call-arg]
+
+
+@lru_cache
+def get_capture_url_settings() -> CaptureURLSettings:
+    return CaptureURLSettings()  # type: ignore[call-arg]
