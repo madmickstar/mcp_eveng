@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_eveng.capture_relay.config import CaptureSSHSettings, RelayListenSettings
+from mcp_eveng.capture_relay.config import CaptureSSHSettings, CaptureURLSettings, RelayListenSettings
 
 
 def test_capture_ssh_settings_read_from_environment(monkeypatch) -> None:
@@ -64,3 +64,20 @@ def test_capture_ssh_env_prefix_does_not_leak_into_relay_listen_settings(monkeyp
     settings = RelayListenSettings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.listen_host == "0.0.0.0"
+
+
+def test_capture_url_settings_defaults_advertise_port_to_8001() -> None:
+    settings = CaptureURLSettings(advertise_host="172.16.130.14", _env_file=None)  # type: ignore[call-arg]
+
+    assert settings.advertise_port == 8001
+
+
+def test_capture_url_settings_and_relay_listen_settings_share_prefix_without_collision(monkeypatch) -> None:
+    monkeypatch.setenv("CAPTURE_RELAY_ADVERTISE_HOST", "172.16.130.14")
+    monkeypatch.setenv("CAPTURE_RELAY_LISTEN_HOST", "0.0.0.0")
+
+    url_settings = CaptureURLSettings(_env_file=None)  # type: ignore[call-arg]
+    listen_settings = RelayListenSettings(_env_file=None)  # type: ignore[call-arg]
+
+    assert url_settings.advertise_host == "172.16.130.14"
+    assert listen_settings.listen_host == "0.0.0.0"

@@ -79,3 +79,31 @@ class RelayListenSettings(BaseSettings):
 
     listen_host: str = Field(default="0.0.0.0")
     listen_port: int = Field(default=8001)
+
+
+class CaptureURLSettings(BaseSettings):
+    """The relay's externally-reachable address, for building
+    `capture://` URLs in `get_capture` -- distinct from
+    `RelayListenSettings.listen_host`, which is a *bind* address
+    (`0.0.0.0` is meaningless as something a client connects *to*).
+    Read only by the main mcp-eveng process.
+
+    Shares the `CAPTURE_RELAY_` prefix with `RelayListenSettings` (no
+    collision -- different field names), and defaults `advertise_port`
+    to the same 8001 as `RelayListenSettings.listen_port`, so a single
+    shared `.env` with just `CAPTURE_RELAY_ADVERTISE_HOST` set "just
+    works" when the relay and the advertised address are the same
+    machine on the default port; override independently if not.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CAPTURE_RELAY_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    advertise_host: str = Field(
+        ..., description="Hostname/IP the .bat connects to for streaming -- not the bind address."
+    )
+    advertise_port: int = Field(default=8001)
