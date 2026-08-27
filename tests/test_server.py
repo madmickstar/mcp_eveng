@@ -61,6 +61,7 @@ DISABLED_BY_DEFAULT_TOOLS = {
     "edit_user",
     "delete_user",
     "list_user_roles",
+    "delete_lab",
 }
 
 

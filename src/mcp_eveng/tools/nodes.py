@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
+from ..edition import is_pro_edition
 from ..search import find_by_name_case_insensitive, iter_named_records
 from ..vendor import extract_vendor, has_image, strip_hidden_marker
 
@@ -516,6 +517,42 @@ async def delete_lab_node(
     )
 
 
+# -- EVE-NG Community bug workaround: a delay-only edit is silently -----
+# rejected -----------------------------------------------------------------
+#
+# Confirmed live against a Community server: EVE-NG's own node-edit code
+# (Node::edit() in the underlying unetlab source) sets an internal
+# "modified" flag for every editable field it changes -- config, icon,
+# image, left, name, top -- EXCEPT `delay`. The `delay` branch updates the
+# value but never flips that flag. If `delay` is the *only* field in the
+# request, the server ends up thinking nothing changed and rejects the
+# whole edit with its own "no attribute has been changed" error, which
+# surfaces to API callers as a generic "Cannot edit node in the selected
+# lab (20026)" -- indistinguishable, without this context, from a real
+# failure. Not something PRO was observed to hit in this project's testing.
+#
+# Workaround: whenever `delay` is being changed and nothing else in the
+# request already flips the flag, pad the request with the node's own
+# current `name` (a value-blind field -- EVE-NG sets `modified = True` for
+# `name` unconditionally, regardless of whether the resent value actually
+# differs from the current one). This is transparent to callers: it's
+# applied only to the raw API payload, never reported back as a changed
+# field.
+
+_MODIFIED_FLAG_FIELDS = {"config", "icon", "image", "left", "name", "top"}
+
+
+def _with_delay_workaround(fields: dict[str, Any], current_data: dict[str, Any]) -> dict[str, Any]:
+    """Return `fields` for the actual API call, padded with the node's
+    current `name` if `delay` is present and no other field already
+    guarantees EVE-NG's "modified" flag gets set (see note above)."""
+    if "delay" not in fields:
+        return fields
+    if _MODIFIED_FLAG_FIELDS & fields.keys():
+        return fields
+    return {**fields, "name": str(current_data.get("name", ""))}
+
+
 def _is_running(node_data: dict[str, Any]) -> bool:
     """A node's `status` field: 0 is stopped; any other value (observed: 2
     while running) counts as not-stopped. Treated conservatively -- an
@@ -672,7 +709,8 @@ async def edit_lab_node(
         await client.stop_node(lab_path, node_id)
         stopped_first = True
 
-    await client.edit_lab_node(lab_path, node_id, **fields)
+    api_fields = _with_delay_workaround(fields, current_data)
+    await client.edit_lab_node(lab_path, node_id, **api_fields)
 
     changed = ", ".join(f"{k}={v!r}" for k, v in fields.items())
     note = " (it was running, so stopped it first)" if stopped_first else ""
@@ -783,7 +821,8 @@ async def change_node_delay(
 
         if _is_running(current_data):
             await client.stop_node(lab_path, node_id)
-        await client.edit_lab_node(lab_path, node_id, delay=resolved_delay)
+        api_fields = _with_delay_workaround({"delay": resolved_delay}, current_data)
+        await client.edit_lab_node(lab_path, node_id, **api_fields)
         return {
             "status": "success",
             "message": f"Set delay to {resolved_delay}s on node {node_name!r} (id {node_id}).",
@@ -886,7 +925,8 @@ async def change_node_delay(
         node_name = str(node.get("name", f"id {target_id}"))
         if _is_running(node):
             await client.stop_node(lab_path, target_id)
-        await client.edit_lab_node(lab_path, target_id, delay=new_delay)
+        api_fields = _with_delay_workaround({"delay": new_delay}, node)
+        await client.edit_lab_node(lab_path, target_id, **api_fields)
         updated.append(f"{node_name} ({new_delay}s)")
 
     plural = "s" if len(updated) != 1 else ""
@@ -1360,66 +1400,141 @@ async def get_node_interfaces(client: EvengClient, lab_path: str, node_id: int) 
 # here (an explicit numeric index is passed straight to the API either way).
 
 
-def _first_available_ethernet_index(interfaces_data: dict[str, Any]) -> int | None:
-    """Index (0-based) of the first unconnected ethernet interface, or None if all are used."""
+def _available_ethernet_interfaces(interfaces_data: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+    """Every unconnected ethernet interface, as (0-based index, interface dict) pairs."""
     ethernet = interfaces_data.get("ethernet")
     if not isinstance(ethernet, list):
-        return None
-    for index, iface in enumerate(ethernet):
-        if not isinstance(iface, dict):
-            continue
-        if iface.get("network_id") in (0, "0", None):
-            return index
-    return None
+        return []
+    return [
+        (index, iface)
+        for index, iface in enumerate(ethernet)
+        if isinstance(iface, dict) and iface.get("network_id") in (0, "0", None)
+    ]
 
 
-def _resolve_interface_index(
-    interfaces_data: dict[str, Any], interface: int | str | None
-) -> tuple[int | None, str | None]:
-    """Resolve `interface` (0-based index, interface name, or None=auto-pick) to an index.
+def _interface_label(index: int, iface: dict[str, Any]) -> str:
+    name = str(iface.get("name", f"index {index}"))
+    return f"{name} (index {index})"
 
-    Returns `(index, error_message)` -- exactly one of the two is None.
+
+def _resolve_interface_selection(
+    interfaces_data: dict[str, Any],
+    interface: int | str | None,
+    selection: str,
+) -> dict[str, Any]:
+    """Resolve which of a node's *available* (unconnected) ethernet
+    interfaces to use for `connect_interface`.
+
+    `interface`:
+      - An `int`, or a digit-only string: a literal 0-based interface
+        index, used directly regardless of whether it's currently
+        connected.
+      - Any other non-empty string: a case-insensitive substring search
+        against every *available* interface's name -- never auto-picks
+        the first available interface by default; a specific interface
+        must always be named or chosen.
+      - `None`/empty: matches every available interface (same as an
+        empty search everywhere else in this project) -- if that's more
+        than one, a numbered list is returned instead of guessing.
+
+    Unless `interface` resolved directly to a literal index, the matched
+    set (every available interface, or the substring matches) is
+    narrowed further:
+      - No matches: an error.
+      - Exactly one match: resolved directly, no prompt.
+      - More than one: needs `selection` -- the number from the shown
+        list, or the exact interface name -- else returns
+        `status: "selection_required"` with a numbered list of the matches.
+
+    Returns a dict with either `{"index": int}` on success, or
+    `status`/`message` (and, for `selection_required` or an unmatched
+    `selection`, `data: {"matches": [...]}`) otherwise.
     """
     ethernet = interfaces_data.get("ethernet")
     if not isinstance(ethernet, list):
         ethernet = []
 
-    if interface is None:
-        index = _first_available_ethernet_index(interfaces_data)
-        if index is None:
-            return None, "no available (unconnected) ethernet interface found"
-        return index, None
-
     if isinstance(interface, int):
         if 0 <= interface < len(ethernet):
-            return interface, None
-        return None, f"interface index {interface} is out of range (has {len(ethernet)} ethernet interfaces)"
+            return {"index": interface}
+        return {
+            "status": "error",
+            "message": f"interface index {interface} is out of range (has {len(ethernet)} ethernet interfaces)",
+        }
 
-    needle = str(interface).strip().lower()
-    for index, iface in enumerate(ethernet):
-        if isinstance(iface, dict) and str(iface.get("name", "")).strip().lower() == needle:
-            return index, None
-    if needle.isdigit():
-        index = int(needle)
+    text = str(interface).strip() if interface is not None else ""
+    if text.isdigit():
+        index = int(text)
         if 0 <= index < len(ethernet):
-            return index, None
-    return None, f"no ethernet interface named {interface!r} found"
+            return {"index": index}
+        return {
+            "status": "error",
+            "message": f"interface index {index} is out of range (has {len(ethernet)} ethernet interfaces)",
+        }
+
+    available = _available_ethernet_interfaces(interfaces_data)
+    if not available:
+        return {"status": "error", "message": "no available (unconnected) ethernet interfaces"}
+
+    needle = text.lower()
+    matches = [
+        (index, iface) for index, iface in available if needle in str(iface.get("name", "")).strip().lower()
+    ]
+
+    if not matches:
+        described = f" matching {interface!r}" if text else ""
+        return {"status": "error", "message": f"no available ethernet interface{described} found"}
+
+    if len(matches) == 1:
+        index, _ = matches[0]
+        return {"index": index}
+
+    labels = [_interface_label(index, iface) for index, iface in matches]
+
+    if selection.strip():
+        sel = selection.strip()
+        if sel.isdigit():
+            idx = int(sel)
+            if 1 <= idx <= len(matches):
+                chosen_index, _ = matches[idx - 1]
+                return {"index": chosen_index}
+        sel_lower = sel.lower()
+        for index, iface in matches:
+            if str(iface.get("name", "")).strip().lower() == sel_lower:
+                return {"index": index}
+        return {
+            "status": "error",
+            "message": (
+                f"Could not match {selection!r} to any current interface. Current "
+                f"matches:\n{format_numbered(labels)}"
+            ),
+            "data": {"matches": labels},
+        }
+
+    described = f" matching {interface!r}" if text else ""
+    return {
+        "status": "selection_required",
+        "message": (
+            f"{len(matches)} available interface(s){described}:\n{format_numbered(labels)}\n\n"
+            "Reply with the number or exact interface name of the one you want."
+        ),
+        "data": {"matches": labels},
+    }
 
 
-def _is_pro_edition(status_data: dict[str, Any]) -> bool:
-    """Whether this EVE-NG server is PRO (vs. Community).
-
-    Matters because EVE-NG PRO allows wiring interfaces on running nodes;
-    Community requires them stopped first (confirmed via a real Community
-    troubleshooting report: "running nodes cannot be directly connected
-    together ... must power down the nodes before being able to establish
-    connections"). PRO's version string carries a "-PRO" suffix (observed
-    live: "6.5.0-27-PRO"); anything else is treated as Community, the more
-    conservative assumption -- an unrecognized version fails safe by
-    stopping first rather than risking a wire attempt EVE-NG might reject.
-    """
-    version = str(status_data.get("version", ""))
-    return version.strip().upper().endswith("-PRO")
+def _connected_network_description(interfaces_data: dict[str, Any], index: int) -> str | None:
+    """If ethernet interface `index` is currently connected to something,
+    a short description of what for a confirmation message; None if free."""
+    ethernet = interfaces_data.get("ethernet")
+    if not isinstance(ethernet, list) or not (0 <= index < len(ethernet)):
+        return None
+    iface = ethernet[index]
+    if not isinstance(iface, dict):
+        return None
+    network_id = iface.get("network_id")
+    if network_id in (0, "0", None):
+        return None
+    return f"network {network_id}"
 
 
 async def _ensure_stopped_for_connection(
@@ -1484,10 +1599,13 @@ async def connect_interface(
     lab_path: str,
     node_id: int,
     interface: int | str | None = None,
+    interface_selection: str = "",
     target_node_id: int | None = None,
     target_interface: int | str | None = None,
+    target_interface_selection: str = "",
     network_id: int | None = None,
     network_name: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Connect one node's interface to another node, or to an existing network.
 
@@ -1505,22 +1623,47 @@ async def connect_interface(
         (case-insensitive) match against the lab's current networks; use
         `network_id` directly if more than one network shares that name.
 
-    `interface`/`target_interface` accept an interface name (e.g. "Gi0/0"),
-    a 0-based index, or can be omitted to auto-pick that node's first
-    available (currently unconnected) ethernet interface -- useful for
-    wiring several links to the same node across separate calls, since
-    each call re-checks what's actually free at that moment.
+    `interface`/`target_interface`:
+      - An interface index (int, or a digit-only string): used directly,
+        even if that interface is already connected to something -- see
+        `confirm` below for how that's guarded.
+      - Any other string: a case-insensitive *substring* search against
+        the node's *available* (unconnected) ethernet interface names --
+        can never resolve to an already-connected interface, by construction.
+      - Omitted entirely: matches every available interface -- also
+        cannot resolve to an already-connected one.
+
+    There is no auto-pick-the-first-available default -- a specific
+    interface always has to be named or chosen. If the search (or an
+    omitted `interface`) matches more than one available interface, this
+    returns `status: "selection_required"` with a numbered list instead
+    of guessing; reply with `interface_selection` (source node) or
+    `target_interface_selection` (target node, node-to-node mode only) --
+    the number from that list, or the exact interface name.
+
+    If an explicit index (source or target) resolves to an interface
+    that's already connected to something, this does **not** silently
+    rewire it -- rewiring an already-connected interface disconnects it
+    from whatever it was previously wired to, with no separate undo.
+    Instead it returns `status: "confirmation_required"`, naming which
+    interface and what it's currently connected to; call again with
+    `confirm=true` to proceed with the rewire anyway, or supply a
+    different interface (by search or a genuinely free index) instead.
+    This only matters for explicit indices -- the search/omitted paths
+    can't reach this case at all, since they only ever resolve to
+    interfaces already confirmed free.
 
     EVE-NG PRO allows wiring interfaces on running nodes; Community
     requires every node involved to be stopped first. Everything that can
-    be validated without side effects (interface resolution, target
-    network resolution) happens before any node is touched; only once the
-    connection is confirmed workable does this check the server's edition
-    (via `get_status`) and, on Community only, stop whichever node(s) are
-    running -- same automatic stop-if-needed behavior as `edit_lab_node`.
-    This ordering matters: a node is never stopped as a side effect of an
-    operation that was going to fail anyway (e.g. the *other* node having
-    no free interface).
+    be validated without side effects (interface resolution, the
+    already-connected check above, target network resolution) happens
+    before any node is touched; only once the connection is confirmed
+    workable does this check the server's edition (via `get_status`) and,
+    on Community only, stop whichever node(s) are running -- same
+    automatic stop-if-needed behavior as `edit_lab_node`. This ordering
+    matters: a node is never stopped as a side effect of an operation that
+    was going to fail anyway (e.g. the *other* node having no free
+    interface, or needing confirmation for an already-connected one).
     """
     node_to_node = target_node_id is not None
     node_to_network = network_id is not None or network_name is not None
@@ -1538,9 +1681,27 @@ async def connect_interface(
     src_data = src_result.get("data") or {}
     if not isinstance(src_data, dict):
         src_data = {}
-    src_index, src_error = _resolve_interface_index(src_data, interface)
-    if src_error:
-        return {"status": "error", "message": f"Node {node_id}: {src_error}."}
+    src_resolved = _resolve_interface_selection(src_data, interface, interface_selection)
+    if "index" not in src_resolved:
+        src_resolved = dict(src_resolved)
+        src_resolved["message"] = f"Node {node_id}: {src_resolved['message']}"
+        return src_resolved
+    src_index = src_resolved["index"]
+
+    src_connected_to = _connected_network_description(src_data, src_index)
+    if src_connected_to and not confirm:
+        src_ethernet = src_data.get("ethernet") or []
+        src_name = str(src_ethernet[src_index].get("name", f"index {src_index}"))
+        return {
+            "status": "confirmation_required",
+            "message": (
+                f"Node {node_id}: interface {src_name} (index {src_index}) is already "
+                f"connected to {src_connected_to}. Connecting it to a new target will "
+                "disconnect it from that, with no separate undo -- reply with "
+                "confirm=true to proceed anyway, or choose a different, currently "
+                "available interface instead."
+            ),
+        }
 
     resolved_network_id: int | str | None = None
     dst_index: int | None = None
@@ -1550,9 +1711,27 @@ async def connect_interface(
         dst_data = dst_result.get("data") or {}
         if not isinstance(dst_data, dict):
             dst_data = {}
-        dst_index, dst_error = _resolve_interface_index(dst_data, target_interface)
-        if dst_error:
-            return {"status": "error", "message": f"Node {target_node_id}: {dst_error}."}
+        dst_resolved = _resolve_interface_selection(dst_data, target_interface, target_interface_selection)
+        if "index" not in dst_resolved:
+            dst_resolved = dict(dst_resolved)
+            dst_resolved["message"] = f"Node {target_node_id} (target): {dst_resolved['message']}"
+            return dst_resolved
+        dst_index = dst_resolved["index"]
+
+        dst_connected_to = _connected_network_description(dst_data, dst_index)
+        if dst_connected_to and not confirm:
+            dst_ethernet = dst_data.get("ethernet") or []
+            dst_name = str(dst_ethernet[dst_index].get("name", f"index {dst_index}"))
+            return {
+                "status": "confirmation_required",
+                "message": (
+                    f"Node {target_node_id} (target): interface {dst_name} "
+                    f"(index {dst_index}) is already connected to {dst_connected_to}. "
+                    "Connecting it to a new target will disconnect it from that, with "
+                    "no separate undo -- reply with confirm=true to proceed anyway, or "
+                    "choose a different, currently available interface instead."
+                ),
+            }
     else:
         resolved_network_id = network_id
         if resolved_network_id is None:
@@ -1588,7 +1767,7 @@ async def connect_interface(
     # this is Community edition and they're running.
     status_result = await client.get_status()
     status_data = status_result.get("data") or {}
-    is_pro = _is_pro_edition(status_data if isinstance(status_data, dict) else {})
+    is_pro = is_pro_edition(status_data if isinstance(status_data, dict) else {})
 
     stopped_nodes: list[int] = []
     if await _ensure_stopped_for_connection(client, lab_path, node_id, is_pro):
@@ -1770,7 +1949,32 @@ async def wipe_node(client: EvengClient, lab_path: str, node_id: int | None = No
 
 
 async def export_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
-    """Export one node's (or all nodes') running config into the saved lab file."""
+    """Export one node's (or all nodes') running config into the saved lab file.
+
+    **PRO/Corporate only.** Listed as a separate toggleable feature
+    ("Export/Import configs or config packs to local PC") on EVE-NG's own
+    official comparison page. Confirmed live: fails unconditionally on
+    Community -- across VPCS and IOL, running and stopped, `config`
+    "Saved" and "Unconfigured" -- while the identical request shape works
+    normally for `start_node`/`stop_node`/`wipe_node` on the same server,
+    ruling out a request-format problem. Checks the server's edition
+    first (same signal `connect_interface`/`share_lab` use) and returns a
+    clear error immediately on Community, rather than the generic
+    "Request not valid" EVE-NG itself gives no useful detail on.
+    """
+    status_result = await client.get_status()
+    status_data = status_result.get("data") if isinstance(status_result, dict) else None
+    if not is_pro_edition(status_data if isinstance(status_data, dict) else {}):
+        return {
+            "status": "error",
+            "message": (
+                "Exporting node config is a PRO/Corporate-only EVE-NG feature -- listed "
+                "as a separate toggleable feature on EVE-NG's own official comparison "
+                "page, and confirmed live to fail unconditionally on Community "
+                "regardless of node type or state. This server is running Community "
+                "edition, so export_node isn't available here."
+            ),
+        }
     return await client.export_node(lab_path, node_id)
 
 
@@ -2175,10 +2379,13 @@ def register(
             lab_path: str,
             node_id: int,
             interface: int | str | None = None,
+            interface_selection: str = "",
             target_node_id: int | None = None,
             target_interface: int | str | None = None,
+            target_interface_selection: str = "",
             network_id: int | None = None,
             network_name: str | None = None,
+            confirm: bool = False,
         ) -> dict[str, Any]:
             """Connect one node's interface to another node, or to an existing network.
 
@@ -2194,10 +2401,27 @@ def register(
             `add_lab_network` -- this one stays visible on the canvas as
             its own icon, same as wiring a cloud/bridge manually in the GUI).
 
-            `interface`/`target_interface` accept an interface name (e.g.
-            "Gi0/0"), a 0-based index, or can be omitted to auto-pick that
-            node's first available (currently unconnected) ethernet
-            interface. Scoped to ethernet interfaces only.
+            `interface`/`target_interface`: an interface index used
+            directly (even if already connected to something -- see
+            `confirm` below), or any other string as a case-insensitive
+            substring search against the node's *available* (unconnected)
+            ethernet interface names, or omit entirely to match every
+            available interface (search/omitted paths can never resolve
+            to an already-connected interface). There's no
+            auto-pick-the-first-available default -- if more than one
+            interface matches, this returns status "selection_required"
+            with a numbered list instead of guessing; reply with
+            `interface_selection`/`target_interface_selection` -- the
+            number from that list, or the exact interface name. Scoped to
+            ethernet interfaces only.
+
+            If an explicit index (source or target) is already connected
+            to something, this does **not** silently rewire it --
+            rewiring disconnects it from whatever it was previously wired
+            to, with no separate undo. Instead it returns status
+            "confirmation_required", naming which interface and what it's
+            currently connected to; reply with `confirm=true` to proceed
+            anyway, or supply a different interface instead.
 
             EVE-NG PRO allows wiring interfaces on running nodes;
             Community requires every node involved to be stopped first.
@@ -2208,26 +2432,38 @@ def register(
             Args:
                 lab_path: Full path to the .unl lab file.
                 node_id: Id of the node whose interface is being connected.
-                interface: Which interface on node_id -- name, index, or
-                    omit to auto-pick the first available one.
+                interface: Which interface on node_id -- index, a search
+                    string, or omit to see every available one.
+                interface_selection: When multiple of node_id's
+                    interfaces matched, the number or exact name of the
+                    one you want.
                 target_node_id: For a node-to-node connection: id of the
                     other node.
                 target_interface: Which interface on target_node_id --
-                    name, index, or omit to auto-pick the first available one.
+                    index, a search string, or omit to see every available one.
+                target_interface_selection: When multiple of
+                    target_node_id's interfaces matched, the number or
+                    exact name of the one you want.
                 network_id: For a node-to-network connection: the network's id.
                 network_name: For a node-to-network connection: the
                     network's exact name (case-insensitive), if you don't
                     already know its id.
+                confirm: Set true to proceed when an explicit index
+                    (source or target) is already connected to something,
+                    accepting that it will be disconnected from that.
             """
             return await connect_interface(
                 await get_client(),
                 lab_path,
                 node_id,
                 interface=interface,
+                interface_selection=interface_selection,
                 target_node_id=target_node_id,
                 target_interface=target_interface,
+                target_interface_selection=target_interface_selection,
                 network_id=network_id,
                 network_name=network_name,
+                confirm=confirm,
             )
 
     if enabled("start_node"):
@@ -2279,6 +2515,13 @@ def register(
         @mcp.tool(name="export_node")
         async def _export_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Export one node's (or all nodes') running config into the saved lab file.
+
+            **PRO/Corporate only** -- listed as a separate toggleable
+            feature on EVE-NG's own official comparison page, and
+            confirmed live to fail unconditionally on Community
+            regardless of node type or state. Checks the server's
+            edition first and returns a clear error immediately on
+            Community.
 
             Args:
                 lab_path: Full path to the .unl lab file.

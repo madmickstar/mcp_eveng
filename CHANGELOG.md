@@ -7,6 +7,258 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`set_link_quality` no longer requires the far side's current
+  quality values to be supplied explicitly.** Previously, changing
+  quality on one side of a node-to-node connection required
+  `far_delay`/`far_jitter`/`far_loss`/`far_bandwidth` all four, since no
+  read path for current values had been found and the underlying API
+  always overwrites both sides' complete state in one request --
+  omitting them risked silently resetting the far side to 0. That gap
+  is now closed: confirmed live (PRO server) that `get_lab_topology`'s
+  response -- the same call this tool already makes to resolve the
+  connection -- includes `source_delay`/`source_jitter`/`source_loss`/
+  `source_bandwidth` and the `destination_*` equivalents on every
+  connection entry. The far side's current values are now read directly
+  from that entry and reused automatically; `far_delay` etc. are optional
+  overrides, not required inputs -- supplying one changes just that
+  value, leaving the rest untouched. Not confirmed whether this holds on
+  every PRO/Corporate version, only the one live server tested, but no
+  new call is needed to use it either way. Verified: two new tests
+  (reading current far-side values when omitted, and a partial override
+  leaving the untouched far-side fields at their current values, not 0)
+  plus the two existing tests that always supplied all four far values
+  explicitly -- confirming explicit values still work identically.
+  Replaced the now-obsolete "requires all four far values" test. Full
+  suite re-run afterwards with zero regressions.
+- **`edit_lab_node`/`change_node_delay`: a `delay`-only edit was silently
+  rejected on EVE-NG Community, surfacing as a generic "Cannot edit node
+  in the selected lab (20026)" error.** Confirmed live against a
+  Community server, then traced to a genuine bug in EVE-NG Community's
+  own backend (`Node::edit()` in the underlying `unetlab` source): every
+  editable field flips an internal "modified" flag when changed --
+  `config`/`icon`/`image`/`left`/`name`/`top` -- except `delay`, whose
+  branch updates the value but never sets the flag. If `delay` is the
+  only field in the request, EVE-NG ends up thinking nothing changed and
+  rejects the whole edit with its own "no attribute has been changed"
+  error, which the outer API layer masks as the generic 20026 message.
+  Not something PRO was observed to hit. New `_with_delay_workaround`
+  helper: whenever `delay` is present and no other field already
+  guarantees the flag gets set, the node's own current `name` is resent
+  alongside it (a value-blind field on EVE-NG's side -- it sets the flag
+  regardless of whether the resent value actually differs). Applied only
+  to the outgoing API payload, not to `edit_lab_node`'s reported
+  "changed" message, so it stays transparent to callers. Verified
+  directly: extracted and ran the real helper against five realistic
+  field combinations (delay-only, delay+explicit-name,
+  delay+already-flag-setting-field, no-delay, delay+ethernet) before
+  relying on it, then re-ran the full `test_nodes.py` suite -- updated
+  the four existing `change_node_delay` tests whose assertions encoded
+  the old (buggy) call shape, and added five new tests covering the
+  helper directly and the message/API-call separation in
+  `edit_lab_node`.
+- **`connect_interface` no longer silently overwrites an already-connected
+  interface when given an explicit index.** Reported live: a
+  smaller/weaker model was observed connecting interfaces it hadn't been
+  told to, sometimes leaving an interface disconnected entirely. Traced
+  to the explicit-index resolution path specifically -- unlike the
+  search/omitted paths (which are scoped to available interfaces only,
+  by construction, and so were never affected), an explicit index was
+  used directly regardless of whether it was already connected to
+  something, silently rewiring (and thereby disconnecting) it. New
+  `confirm` parameter and `_connected_network_description` helper: if an
+  explicit index (source or target) resolves to an already-connected
+  interface, this now returns `status: "confirmation_required"` naming
+  the interface and what it's connected to, rather than proceeding --
+  `confirm=true` rewires it anyway. Checked before anything else with
+  side effects (target network resolution, edition check, stopping any
+  node), same discipline as an interface-resolution error. Verified
+  directly -- not just hand-traced -- by extracting the actual resolver
+  and new helper functions from the real module and running them against
+  realistic connected/free/search/omitted scenarios before this was
+  committed. New tests cover explicit-index-connected (blocks),
+  explicit-index-connected-with-confirm (proceeds), explicit-index-free
+  (never blocked), the same check on the target node in node-to-node
+  mode, and confirming the search path genuinely cannot reach this case
+  at all.
+
+### Added
+- **`set_link_quality`: new PRO/Corporate-only tool for per-connection
+  link quality (delay/jitter/packet loss/bandwidth), set independently on
+  each side of a connection.** No Community equivalent exists at all
+  (confirmed directly by a user: no GUI option there), and unlike this
+  project's other PRO/Community differences, there's no open-source
+  Community-side code to cross-check against either -- this feature is
+  PRO/Corporate-exclusive from the ground up. There's no documented
+  public API for it: EVE-NG's own API docs don't cover it, and PRO's
+  backend is closed-source. The request shape (`PUT /labs/{lab}/quality`)
+  was captured live from a real PRO server's own GUI network traffic --
+  four separate captures, two on a plain node-to-node link and two on a
+  node-to-network link -- not inferred or guessed. Confirmed from those
+  captures: a side attached to a network of *any* kind (not just a
+  literal bridge) can't have its quality set at all -- EVE-NG forces it
+  to 0 regardless of what's requested, generalizing the original
+  "bridges only" suspicion. Also confirmed: `save: 0` applies live
+  without persisting (the GUI's "Apply"), `save: 1` does both (the GUI's
+  "Save"). One confirmed gap, handled deliberately rather than papered
+  over: there's no known way to read a connection's *current* quality
+  values anywhere in the API (`get_lab_topology`/`get_node_interfaces`/
+  `list_lab_nodes` were all checked live and none return it), and the
+  endpoint always overwrites both sides' complete state in one request --
+  so this tool requires the far side's current values to be supplied
+  explicitly whenever that side is another node, rather than risk
+  silently resetting them to 0. Verified: payload construction tested
+  directly against the real captured requests byte-for-byte (node-to-node
+  and node-to-network cases), plus edge cases (missing far-side values,
+  an unconnected interface, an unknown interface name) -- 8 new tests in
+  `tests/tools/test_quality.py`. Full test suite re-run afterwards with
+  zero regressions (confirmed identical to the pre-existing failure list
+  in the unmodified project).
+
+### Documentation
+- **Corrected false PyPI-install framing in the README and Linux/Windows
+  install guides** -- this project is not published on PyPI, but
+  `docs/install-linux.md`'s "Install" section (and the main README's)
+  presented `pip install mcp-eveng` as the primary/first install method,
+  which doesn't currently work at all. Both now lead with the actual
+  working method (`git clone` + `pip install -e .`), with the PyPI
+  command's absence explained rather than silently dropped.
+- New "Running as a systemd service (Linux)" section in
+  `docs/install-linux.md`, covering a confirmed working end-to-end
+  install into `/opt/mcp_eveng`: the `python3.13-venv` prerequisite,
+  cloning, copying the correct `tools.env.pro.example`/
+  `tools.env.comm.example` for your edition, creating the venv and a
+  dedicated non-root `mcp-eveng` service account, the full systemd unit
+  file, and enabling/verifying the service. `docs/install-windows.md`
+  has the identical stale PyPI-install framing this same fix addressed
+  on Linux -- not yet corrected there.
+
+### Changed
+- **`delete_lab` is now disabled by default**, added to
+  `tool_config.py`'s `_DEFAULT_DISABLED` alongside the six
+  user-management tools -- deleting an entire lab is a more severe,
+  harder-to-recover-from action than deleting one thing inside it, unlike
+  `delete_folder`/`delete_lab_node`/`delete_lab_network`, all still
+  enabled by default. Updated in both `tools.env.pro.example` and
+  `tools.env.comm.example` (explicitly listed as `disabled` in both,
+  matching how the user-management tools are already documented there,
+  rather than just relying on the hardcoded default) -- confirmed this
+  doesn't disturb the two files' full parity (still differing only in
+  `export_node`/`share_lab`) by running the comparison directly against
+  both real files. Also updated: the README's "Controlling which tools
+  are exposed" and "Available tools" table, `docs/tools-reference.md`'s
+  "Deleting things requires confirmation" section, and the test suite
+  (`test_tool_config.py`, `test_server.py`'s `DISABLED_BY_DEFAULT_TOOLS`)
+  -- checked every other test referencing `delete_lab` first to confirm
+  none of them assumed its old enabled-by-default status (the ones in
+  `test_labs.py` and `test_meta.py` test the underlying function/a fully
+  mocked tool list directly, independent of `tool_config`, so needed no
+  changes).
+- **Reverted `tools.env.comm.example` back to full parity with
+  `tools.env.pro.example` — same tools listed in both, differing only in
+  values, not which tools are even mentioned.** A previous version of
+  this file omitted the six user-management tools entirely on the
+  assumption user administration wasn't supported on Community at all.
+  That assumption was wrong, corrected via direct manual testing against
+  a real Community server: adding a second admin user worked normally,
+  as did adding a folder and moving a lab into it. Both files now list
+  all 43 tools identically, disabling the same six user-management tools
+  by default on both editions for the same general reason (not exposing
+  user administration to an LLM by default) -- Community's file differs
+  from PRO's *only* in `export_node`/`share_lab`, both explicitly
+  `disabled`, since neither can be safely omitted the way a
+  `_DEFAULT_DISABLED` tool can (omitting a normally-enabled tool's line
+  makes it enabled by default, the opposite of intended). Also added,
+  confirmed directly rather than from official docs: Community has no
+  per-lab sharing concept at all -- every lab is shared by default,
+  which is *why* `share_lab` silently has no effect there rather than
+  erroring outright. Test suite rewritten again to match -- checks raw
+  file content directly (not just the processed status dict, which
+  can't distinguish "listed as disabled" from "never mentioned") for
+  both full-parity and the two intentional exceptions, verified by
+  running every assertion directly against the real shipped files before
+  this was committed.
+- **`tools.env.comm.example` redesigned to only list tools actually
+  usable on Community**, not every tool with unusable ones marked
+  disabled. The six user-management tools (`list_users`, `get_user`,
+  `add_user`, `edit_user`, `delete_user`, `list_user_roles`) are now
+  omitted entirely -- per direct guidance that user management isn't
+  supported on Community at all -- rather than listed as `disabled`;
+  safe to omit specifically because they're hardcoded disabled-by-default
+  in `tool_config.py`'s `_DEFAULT_DISABLED` regardless of whether the
+  file mentions them. `export_node`/`share_lab` remain the one exception,
+  still explicitly listed as `disabled`: neither is in
+  `_DEFAULT_DISABLED`, so omitting their lines would make them *enabled*
+  by default instead -- documented clearly in the file's own header so
+  this isn't a mystery later. Verified against the real files, not
+  assumed: raw `dotenv_values()` output checked directly (not just the
+  processed status dict, which always merges in `_DEFAULT_DISABLED`'s
+  keys and so can't distinguish "omitted" from "explicitly disabled") to
+  confirm the six lines are genuinely absent, and a full
+  `make_enabled_predicate` run across all 43 tools confirmed exactly the
+  intended 8 end up disabled. Test suite rewritten to match -- the old
+  `pro.keys() == comm.keys()` comparison no longer holds (and, it turns
+  out, never actually tested what it appeared to either way, for the
+  same reason above) -- replaced with tests reading raw file content
+  directly plus one full functional end-to-end check.
+- **`tools.env.example` split into `tools.env.pro.example` (PRO/Corporate)
+  and `tools.env.comm.example` (Community).** The two are identical
+  except `export_node`/`share_lab` are disabled in the Community file --
+  both are PRO/Corporate-only features (see "PRO vs Community
+  differences"), so there's nothing they can actually do there. The old
+  single `tools.env.example` (effectively already the PRO version, since
+  it had both tools enabled) is removed, not kept as a third file.
+  Verified live: `dotenv_values` correctly strips the inline `#` comment
+  on each disabled line before this was shipped, not assumed. New
+  regression tests load the two *actual* shipped files (not hand-copied
+  strings) and confirm they differ by exactly those two tools and
+  nothing else -- run directly against both files as a sanity check
+  before this was committed, not just left to the test suite. Every
+  reference to the old filename updated across `tool_config.py`'s module
+  docstring and the README (`tools.env.example` in `CHANGELOG.md`'s own
+  historical entries deliberately left alone -- they describe what was
+  true at the time).
+- **`connect_interface` no longer auto-picks the first available
+  interface by default.** `interface`/`target_interface` now accept a
+  case-insensitive *substring* search against the node's available
+  (unconnected) ethernet interface names, or an explicit index; if
+  omitted, or if the search matches more than one available interface,
+  this returns `status: "selection_required"` with a numbered list
+  instead of guessing -- new `interface_selection`/
+  `target_interface_selection` parameters resolve the choice on a
+  follow-up call, same search -> select pattern used everywhere else in
+  this project. With only one available interface, no prompt is needed
+  either way, since there's no actual choice to make. Replaced
+  `_first_available_ethernet_index`/`_resolve_interface_index` with
+  `_available_ethernet_interfaces`/`_resolve_interface_selection`. Every
+  higher-level `connect_interface` test was checked by hand (and
+  scripted) against the new logic; only one needed changing (a rename --
+  its scenario had exactly one available interface per node, still
+  unambiguous under the new rules) plus two new true end-to-end tests
+  for the actual `selection_required` path and resolving it by number.
+
+### Added
+- **`export_node` and `share_lab` are now edition-gated**, checking the
+  server's edition (via `get_status`) before doing anything and
+  returning a clear error immediately on Community, instead of the
+  generic `"Request not valid"`/`"Lab has not been modified"` EVE-NG
+  itself gives no useful detail on. Confirmed against EVE-NG's own
+  official features-compare page: both are listed there as separate
+  toggleable PRO/Corporate features ("Export/Import configs...", "Shared
+  Lab"/"Shared Project"), directly explaining the unconditional live
+  failures found while testing against a real Community server.
+- New `edition.py` module: extracted the previously-private
+  `_is_pro_edition` helper (only used inside `connect_interface`) into a
+  shared, documented `is_pro_edition()` -- now the single source of
+  truth for all three edition-gated tools, with the confirmed reasoning
+  for each written into its module docstring. `connect_interface`'s
+  existing edition-aware behavior (PRO allows wiring running nodes;
+  Community requires stopping first) is unchanged, just now built on the
+  shared helper instead of a private one.
+- New README "PRO vs Community differences" section, consolidating all
+  three edition-aware tools in one place rather than scattering the
+  explanation across each tool's own docs.
+
 ### Documentation
 - Trimmed the README "Known issues" section down to just the core
   symptom statement -- the extensive supporting detail (what's been
@@ -178,6 +430,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user-management tools), unlike every other tool added so far.
 
 ### Fixed
+- **Node-template no-image detection now works on Community edition, not
+  just PRO.** Confirmed live against a real Community server: it marks a
+  template with no image installed by suffixing its description with
+  `.missing`, not PRO's `.hided` -- `list_node_templates`'s filter
+  (default: only templates with an image) only recognized `.hided`, so
+  on Community it was effectively filtering nothing, reporting nearly
+  the entire ~180-template catalog as usable regardless of whether an
+  image was actually installed. `vendor.py`'s `_HIDDEN_SUFFIXES` now
+  recognizes both suffixes; `has_image`/`strip_hidden_marker` updated to
+  match. New tests for the `.missing` case, including a spot-check
+  against real Community catalog samples.
+- **`get_node_template`'s `has_image` is now computed the same way
+  `list_node_templates` computes it** (from the description's no-image
+  suffix), instead of from whether `options.image.list` is non-empty.
+  Confirmed live those two signals disagree for a template with no
+  "image" option at all -- e.g. VPCS, a simulator built into EVE-NG
+  itself, not a separately-installed binary: its description carries no
+  suffix (genuinely usable, confirmed via a live `add_lab_node` that
+  succeeded immediately), but `options` has no "image" key to inspect at
+  all, so the old options-based check reported `has_image: false` for a
+  template that was actually perfectly usable. Using the same signal as
+  `list_node_templates` also guarantees the two tools always agree on
+  the same template, which they previously didn't for VPCS specifically.
 - **`EvengClient`'s auto-relogin now covers `400` in addition to `401`,
   trusting the HTTP status code alone rather than the response body.**
   This took two rounds to get right, similar to earlier fixes in this

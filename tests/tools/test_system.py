@@ -112,7 +112,13 @@ async def test_get_node_template_annotates_vendor() -> None:
     assert result["data"]["vendor"] == "Juniper"
 
 
-async def test_get_node_template_has_image_true_when_image_list_non_empty() -> None:
+async def test_get_node_template_has_image_true_when_description_has_no_suffix() -> None:
+    # has_image is computed from the description's own no-image suffix
+    # (same signal list_node_templates uses), not from
+    # options.image.list -- confirmed necessary live: those two signals
+    # disagree for templates with no "image" option at all (see the
+    # VPCS test below). The "list" content here is realistic but
+    # irrelevant to has_image itself now; it's just passed through.
     client = make_client(
         get_node_template={
             "status": "success",
@@ -128,17 +134,74 @@ async def test_get_node_template_has_image_true_when_image_list_non_empty() -> N
     assert result["data"]["has_image"] is True
 
 
-async def test_get_node_template_has_image_false_when_image_list_empty() -> None:
+async def test_get_node_template_has_image_false_when_description_has_hided_suffix() -> None:
     client = make_client(
         get_node_template={
             "status": "success",
-            "data": {"description": "Cisco ASA", "options": {"image": {"list": {}}}},
+            "data": {"description": "Cisco ASA.hided", "options": {"image": {"list": {}}}},
         }
     )
 
     result = await system.get_node_template(client, "asa")
 
     assert result["data"]["has_image"] is False
+
+
+async def test_get_node_template_has_image_false_when_description_has_missing_suffix() -> None:
+    # Community edition's convention -- confirmed live against a real
+    # Community server's catalog.
+    client = make_client(
+        get_node_template={
+            "status": "success",
+            "data": {"description": "Cisco ASA.missing", "options": {"image": {"list": {}}}},
+        }
+    )
+
+    result = await system.get_node_template(client, "asa")
+
+    assert result["data"]["has_image"] is False
+
+
+async def test_get_node_template_has_image_true_when_no_image_option_at_all() -> None:
+    # Regression test: confirmed live against a real Community server --
+    # VPCS has no "image" key in its options whatsoever (just
+    # name/icon/config/delay, not a separately-installed binary image),
+    # yet add_lab_node succeeds immediately. Its description carries no
+    # suffix, so has_image correctly reports True from that alone --
+    # this is exactly the case that made an options-based check (the
+    # original implementation) wrong: it had no "image" key to check at
+    # all, forcing an awkward special case that computing has_image from
+    # the description avoids entirely.
+    client = make_client(
+        get_node_template={
+            "status": "success",
+            "data": {
+                "description": "Virtual PC (VPCS)",
+                "options": {
+                    "name": {"name": "Name/prefix", "type": "input", "value": "VPC"},
+                    "icon": {"name": "Icon", "type": "list", "value": "x"},
+                    "config": {"name": "Startup configuration", "type": "list", "value": "0"},
+                    "delay": {"name": "Delay (s)", "type": "input", "value": 0},
+                },
+            },
+        }
+    )
+
+    result = await system.get_node_template(client, "vpcs")
+
+    assert result["data"]["has_image"] is True
+
+
+async def test_get_node_template_has_image_false_when_description_missing() -> None:
+    # No description at all -- has_image can't be determined from it,
+    # same conservative-default reasoning as vendor falling back to
+    # "Unknown" in this case.
+    client = make_client(get_node_template={"status": "success", "data": {"options": {}}})
+
+    result = await system.get_node_template(client, "unknown-template")
+
+    assert result["data"]["has_image"] is False
+    assert result["data"]["vendor"] == "Unknown"
 
 
 async def test_eve_list_network_types_delegates_to_client() -> None:

@@ -201,17 +201,40 @@ does not produce a direct line — it produces no visible cable at all.
   the lab's current networks and errors if more than one shares that
   name; use `network_id` directly to disambiguate.
 
-`interface`/`target_interface` accept an interface name (e.g. `"Gi0/0"`),
-a 0-based index, or can be omitted entirely to auto-pick that node's first
-available (currently unconnected) ethernet interface — since each call
-re-checks what's actually free, wiring several links to the same node
-across separate calls naturally picks a different interface each time
-without you having to track indices yourself. Scoped to ethernet
-interfaces only: EVE-NG's interfaces API returns ethernet and serial as
-separate lists with no confirmed data here on whether the `PUT` endpoint's
-index space covers serial too, so rather than guess, serial isn't
-supported by name/auto-pick (an explicit numeric index is still passed
-straight through either way, for anyone who knows the right value).
+`interface`/`target_interface`: an interface index used directly, or any
+other string used as a case-insensitive *substring* search against the
+node's *available* (unconnected) ethernet interface names, or omit
+entirely to match every available interface. There's no
+auto-pick-the-first-available default — a specific interface always has
+to be named or chosen; if the search (or an omitted `interface`) matches
+more than one available interface, this returns `status:
+"selection_required"` with a numbered list instead of guessing, and
+`interface_selection`/`target_interface_selection` (the number from that
+list, or the exact interface name) resolves it on the next call — same
+search → select pattern used everywhere else in this project. With only
+one available interface, no prompt is needed regardless — there's no
+actual choice to make. Scoped to ethernet interfaces only: EVE-NG's
+interfaces API returns ethernet and serial as separate lists with no
+confirmed data here on whether the `PUT` endpoint's index space covers
+serial too, so rather than guess, serial isn't supported by name/search
+(an explicit numeric index is still passed straight through either way,
+for anyone who knows the right value).
+
+**An explicit index can point at an interface that's already connected to
+something — the search/omitted paths can't, by construction, since both
+are scoped to available interfaces only.** Reported live: a smaller/
+weaker model was observed connecting interfaces it hadn't been told to,
+and sometimes leaving an interface disconnected entirely — traced to
+exactly this gap. Rewiring an already-connected interface silently
+disconnects it from whatever it was previously wired to, with no separate
+undo, so this checks first: if an explicit index (source or target)
+resolves to an interface with a non-zero `network_id`, it returns
+`status: "confirmation_required"` naming the interface and what it's
+currently connected to, rather than proceeding — call again with
+`confirm=true` to rewire it anyway, or supply a different interface.
+This check happens before anything else with side effects (before target
+network resolution, before the edition check, before stopping any node),
+same discipline as an interface-resolution error.
 
 **EVE-NG PRO allows wiring interfaces on running nodes; Community requires
 every node involved to be stopped first.** `connect_interface` checks the
@@ -224,6 +247,8 @@ resolution) happens *before* any node is touched, so a node is never
 stopped as a side effect of a connection that was going to fail anyway
 (e.g. the other node having no free interface) — only once the connection
 is confirmed workable does the edition check and any stopping happen.
+See the README's "PRO vs Community differences" for the other two tools
+that also behave differently by edition (`export_node`, `share_lab`).
 
 **`add_lab_network` sends every field EVE-NG's own GUI sends when creating
 a network** — not just `type`/`left`/`top`/`name`. This took two rounds to
@@ -370,11 +395,14 @@ author, version, notes) and needs an exact `lab_path`, not a search string.
 default.** EVE-NG's built-in catalog has ~180 templates, but most servers
 only have images uploaded for a handful of them — the rest can't actually
 be used to add a node yet. EVE-NG marks a template with no image by
-suffixing its description with `.hided` (confirmed against a live server:
-every template actually in use by a real node lacked this suffix), and
-`list_node_templates` filters those out unless you pass
-`include_without_images=true`, in which case you see the full catalog
-(each result's `has_image` field tells you which is which).
+suffixing its description — `.hided` on PRO, `.missing` on Community
+(confirmed against live servers of both editions), and `has_image`
+(returned by both `list_node_templates` and `get_node_template`, computed
+the same way in both so they always agree on the same template) reflects
+whichever suffix convention the server actually uses. `list_node_templates`
+filters those out unless you pass `include_without_images=true`, in which
+case you see the full catalog (each result's `has_image` field tells you
+which is which).
 
 **Vendor context on templates and nodes.** EVE-NG's API has no explicit
 vendor field anywhere — not on templates, not on nodes. `list_node_templates`,
@@ -485,7 +513,11 @@ folder to look in the way an exact path could.
 **`delete_lab` never deletes more than one lab in a single call**, even
 when several labs share matching text in different folders — this is
 deliberately stricter than the other tools, matching its status as the
-most consequential delete tool in the set.
+most consequential delete tool in the set. It's also the only delete tool
+disabled by default (see "Controlling which tools are exposed") — unlike
+`delete_folder`/`delete_lab_node`/`delete_lab_network`, deleting an entire
+lab is a more severe, harder-to-recover-from action than deleting one
+thing inside it.
 
 ⚠️ **This has not been exercised against a live EVE-NG server yet** — the
 logic is covered by unit tests, but please verify the actual flow

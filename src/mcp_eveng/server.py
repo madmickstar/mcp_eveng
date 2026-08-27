@@ -26,7 +26,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .config import MCPTransportSettings, Transport, get_mcp_settings
 from .dependencies import close_client, get_client
 from .tool_config import load_tool_status, make_enabled_predicate
-from .tools import console, folders, labs, meta, networks, nodes, system, users
+from .tools import console, folders, labs, meta, networks, nodes, quality, system, users
 
 logger = logging.getLogger("mcp_eveng")
 
@@ -114,7 +114,7 @@ def create_server(
         lifespan=_lifespan,
     )
 
-    for module in (system, folders, users, labs, networks, nodes, meta, console):
+    for module in (system, folders, users, labs, networks, nodes, quality, meta, console):
         module.register(mcp, get_client, enabled)
 
     return mcp

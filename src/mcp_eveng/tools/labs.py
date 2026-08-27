@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
+from ..edition import is_pro_edition
 from ..search import iter_named_records
 
 GetClient = Callable[[], Awaitable[EvengClient]]
@@ -91,6 +92,19 @@ async def share_lab(
 ) -> dict[str, Any]:
     """Share a lab with one or more users, added to whoever it's already shared with.
 
+    **PRO/Corporate only.** Listed as a separate toggleable feature
+    ("Shared Lab", "Shared Project") on EVE-NG's own official
+    features-compare page, and confirmed live on Community: `get_lab`
+    never returns a `shared` key at all, and attempting to actually add a
+    share fails with "Lab has not been modified" -- the request is
+    accepted but silently has no effect. Confirmed directly (a Community
+    user, not the official docs): there's no per-lab sharing concept to
+    toggle at all on Community -- all labs are shared by default. This
+    checks the server's edition first (same signal
+    `connect_interface`/`export_node` use) and returns a clear error
+    immediately on Community, rather than walking through the
+    search/select flow only to fail at the very end.
+
     `search` is a case-insensitive substring match against every EVE-NG
     username -- empty matches everyone. The literal word "all" is a
     shortcut that bypasses searching/selecting entirely and shares with
@@ -109,6 +123,21 @@ async def share_lab(
     confirmation lists every user about to be newly added; reply "accept"
     or "yes" (`confirm`) to apply -- same wording as every delete tool.
     """
+    status_result = await client.get_status()
+    status_data = status_result.get("data") if isinstance(status_result, dict) else None
+    if not is_pro_edition(status_data if isinstance(status_data, dict) else {}):
+        return {
+            "status": "error",
+            "message": (
+                "Lab sharing is a PRO/Corporate-only EVE-NG feature -- listed as a "
+                "separate toggleable feature on EVE-NG's own official comparison page, "
+                "and confirmed live: on Community, get_lab never returns a 'shared' key "
+                "at all, and attempting to actually add a share fails with \"Lab has not "
+                "been modified\" (the request is silently accepted with no effect). This "
+                "server is running Community edition, so lab sharing isn't available here."
+            ),
+        }
+
     all_users = await _list_usernames(client)
     if not all_users:
         return {"status": "cancelled", "message": "No users found on this server."}
@@ -518,6 +547,14 @@ def register(
             confirm: bool = False,
         ) -> dict[str, Any]:
             """Share a lab with one or more users, added to whoever it's already shared with.
+
+            **PRO/Corporate only** -- listed as a separate toggleable
+            feature on EVE-NG's own official comparison page, and
+            confirmed live it doesn't actually work on Community despite
+            appearing to accept the request -- there's no per-lab
+            sharing concept there at all, since all labs are shared by
+            default. Checks the server's edition first and returns a
+            clear error immediately on Community.
 
             `search` is a case-insensitive substring match against every
             EVE-NG username -- empty matches everyone. The literal word

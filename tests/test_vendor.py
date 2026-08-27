@@ -19,6 +19,26 @@ def test_strip_hidden_marker_leaves_others_untouched() -> None:
     assert strip_hidden_marker("Cisco CSR 1000V (XE 16.x)") == "Cisco CSR 1000V (XE 16.x)"
 
 
+# -- Community edition's ".missing" suffix (same signal as PRO's ".hided") -----
+# Confirmed live against a real Community server: of 168 catalog entries,
+# every template actually installed lacked this suffix; everything else
+# had it -- the exact same role ".hided" plays on PRO, just a different
+# literal string.
+
+
+def test_has_image_false_with_missing_suffix() -> None:
+    assert has_image("A10 vThunder.missing") is False
+
+
+def test_strip_hidden_marker_removes_missing_suffix() -> None:
+    assert strip_hidden_marker("A10 vThunder.missing") == "A10 vThunder"
+
+
+def test_extract_vendor_strips_missing_suffix() -> None:
+    assert extract_vendor("Arista vEOS Router.missing") == "Arista"
+    assert extract_vendor("Windows Server.missing") == "Microsoft"
+
+
 # -- direct alias-map matches, case-insensitive --------------------------------
 
 
@@ -116,3 +136,35 @@ def test_extract_vendor_matches_live_catalog_samples() -> None:
     }
     for description, expected_vendor in live_samples.items():
         assert extract_vendor(description) == expected_vendor
+
+
+def test_has_image_matches_live_community_catalog_samples() -> None:
+    # A real sample from a live Community server's `list_node_templates`
+    # response -- installed templates (no suffix) vs. the ".missing" ones
+    # that shouldn't show up in the default (has-image-only) listing.
+    installed = [
+        "Cisco IOL",
+        "Cisco vIOS Switch",
+        "Juniper 128T",
+        "Juniper vEX Switch",
+        "Juniper vMX",
+        "Juniper vSRX NextGen",
+        "Linux",
+        "Virtual PC (VPCS)",
+        "Viptela vBond",
+        "Viptela vManage",
+        "Viptela vSmart",
+        "Cisco Nexus Dashboard (ND)",
+    ]
+    not_installed = [
+        "Cisco vIOS Router.missing",
+        "Cisco CSR 1000V (XE 16.x).missing",
+        "Juniper vEVO Router.missing",
+        "MikroTik RouterOS.missing",
+        "Windows.missing",
+    ]
+    for description in installed:
+        assert has_image(description) is True, description
+    for description in not_installed:
+        assert has_image(description) is False, description
+

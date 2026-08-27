@@ -30,12 +30,11 @@ async def list_node_templates(
 
     By default only lists templates that have at least one image
     installed. EVE-NG marks a template with no image by suffixing its
-    description with ".hided" (confirmed against a live server: every
-    template actually in use by a real node lacked this suffix); this
-    filters those out so you're only shown templates you could actually
-    use right now. Pass `include_without_images=True` to see the full
-    catalog, including templates you can't add a node with until an image
-    is uploaded for them.
+    description -- ".hided" on PRO, ".missing" on Community (confirmed
+    against live servers of both editions); this filters those out so
+    you're only shown templates you could actually use right now. Pass
+    `include_without_images=True` to see the full catalog, including
+    templates you can't add a node with until an image is uploaded for them.
 
     EVE-NG's API has no explicit vendor field, so `vendor` on each result
     is a best-effort label extracted from the template's description text
@@ -69,18 +68,29 @@ async def list_node_templates(
 
 
 async def get_node_template(client: EvengClient, template: str) -> dict[str, Any]:
-    """Get details (available images, default options) for one node template, with vendor context."""
+    """Get details (available images, default options) for one node template, with vendor context.
+
+    `has_image` is computed the same way `list_node_templates` computes
+    it -- from the description's no-image suffix (`vendor.has_image`),
+    not from whether the `options.image.list` is non-empty. Those two
+    signals disagree for a template with no "image" option at all (e.g.
+    VPCS -- a simulator built into EVE-NG itself, not a separately
+    installed binary): its description carries no suffix (genuinely
+    usable, confirmed live), but `options` has no "image" key to check
+    at all, which an options-based check would have to special-case.
+    Using the same signal as `list_node_templates` avoids that and keeps
+    the two tools in agreement for the same template.
+    """
     result = await client.get_node_template(template)
     data = result.get("data")
     if not isinstance(data, dict):
         return result
 
     description = str(data.get("description", ""))
-    image_list = ((data.get("options") or {}).get("image") or {}).get("list") or {}
     enriched = {
         **data,
         "vendor": extract_vendor(description) if description else "Unknown",
-        "has_image": bool(image_list),
+        "has_image": has_image(description) if description else False,
     }
     return {**result, "data": enriched}
 
@@ -128,6 +138,15 @@ def register(
 
             Includes a best-effort `vendor` label extracted from the
             template's description -- EVE-NG's API has no explicit vendor field.
+
+            `has_image` is computed the same way `list_node_templates`
+            computes it -- from the description's no-image suffix, not
+            from whether `options.image.list` is non-empty. Confirmed
+            live those two signals disagree for a template with no
+            "image" option at all (e.g. VPCS, a simulator built into
+            EVE-NG itself, not a separately-installed binary) -- its
+            description carries no suffix (genuinely usable), while
+            `options` simply has no "image" key to inspect at all.
 
             Args:
                 template: Template id, e.g. "iol", "vios", "csr1000v".

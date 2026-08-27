@@ -73,8 +73,44 @@ def _lab_with_shared(*shared: str) -> dict:
     return {"status": "success", "data": {"shared": list(shared)}}
 
 
-async def test_share_lab_no_users_on_server_is_cancelled() -> None:
+def _pro_client(**method_returns) -> AsyncMock:
+    # share_lab is PRO/Corporate-only and checks the server's edition
+    # first -- every test below except the edition-gate tests themselves
+    # needs a PRO get_status to reach the rest of the logic at all.
+    client = make_client(**method_returns)
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.5.0-27-PRO"}}
+    return client
+
+
+async def test_share_lab_rejects_immediately_on_community_edition() -> None:
+    # PRO/Corporate-only, per EVE-NG's own official comparison page and
+    # confirmed live -- must reject before even fetching usernames, not
+    # walk through search/select only to fail at the end.
     client = AsyncMock()
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.2.0-4"}}
+
+    result = await labs.share_lab(client, "/User1/Lab 1.unl", search="alice")
+
+    assert result["status"] == "error"
+    assert "community" in result["message"].lower()
+    client.list_users.assert_not_awaited()
+    client.get_lab.assert_not_awaited()
+
+
+async def test_share_lab_rejects_on_missing_version_conservatively() -> None:
+    # No/unrecognized version string -- treated as Community, the
+    # conservative default (same reasoning as connect_interface/export_node).
+    client = AsyncMock()
+    client.get_status.return_value = {"status": "success", "data": {}}
+
+    result = await labs.share_lab(client, "/User1/Lab 1.unl", search="alice")
+
+    assert result["status"] == "error"
+    client.list_users.assert_not_awaited()
+
+
+async def test_share_lab_no_users_on_server_is_cancelled() -> None:
+    client = _pro_client()
     client.list_users.return_value = {"status": "success", "data": {}}
 
     result = await labs.share_lab(client, "/User1/Lab 1.unl")
@@ -84,7 +120,7 @@ async def test_share_lab_no_users_on_server_is_cancelled() -> None:
 
 
 async def test_share_lab_search_no_match_is_cancelled() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
 
     result = await labs.share_lab(client, "/User1/Lab 1.unl", search="zzz")
@@ -93,7 +129,7 @@ async def test_share_lab_search_no_match_is_cancelled() -> None:
 
 
 async def test_share_lab_more_than_twenty_matches_asks_to_narrow() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data(*(f"user{i}" for i in range(25)))
 
     result = await labs.share_lab(client, "/User1/Lab 1.unl", search="user")
@@ -104,7 +140,7 @@ async def test_share_lab_more_than_twenty_matches_asks_to_narrow() -> None:
 
 
 async def test_share_lab_empty_search_matches_everyone() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -115,7 +151,7 @@ async def test_share_lab_empty_search_matches_everyone() -> None:
 
 
 async def test_share_lab_single_match_proceeds_without_prompt() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -127,7 +163,7 @@ async def test_share_lab_single_match_proceeds_without_prompt() -> None:
 
 
 async def test_share_lab_multiple_matches_lists_numbered_with_all_option() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "alan")
 
     result = await labs.share_lab(client, "/User1/Lab 1.unl", search="al")
@@ -139,7 +175,7 @@ async def test_share_lab_multiple_matches_lists_numbered_with_all_option() -> No
 
 
 async def test_share_lab_selection_by_number() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alan", "alice")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -151,7 +187,7 @@ async def test_share_lab_selection_by_number() -> None:
 
 
 async def test_share_lab_selection_by_exact_username() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alan", "alice")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -162,7 +198,7 @@ async def test_share_lab_selection_by_exact_username() -> None:
 
 
 async def test_share_lab_selection_all_means_every_matched_user() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alan", "alice", "bob")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -174,7 +210,7 @@ async def test_share_lab_selection_all_means_every_matched_user() -> None:
 
 
 async def test_share_lab_invalid_selection_is_error() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alan", "alice")
 
     result = await labs.share_lab(client, "/User1/Lab 1.unl", search="al", selection="zzz")
@@ -184,7 +220,7 @@ async def test_share_lab_invalid_selection_is_error() -> None:
 
 
 async def test_share_lab_search_all_bypasses_search_and_selection_entirely() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob", "carol")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -197,7 +233,7 @@ async def test_share_lab_search_all_bypasses_search_and_selection_entirely() -> 
 
 
 async def test_share_lab_preserves_existing_shares() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared("carol")  # already shared with carol
 
@@ -208,7 +244,7 @@ async def test_share_lab_preserves_existing_shares() -> None:
 
 
 async def test_share_lab_already_shared_user_is_cancelled_no_op() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared("alice")  # already shared
 
@@ -219,7 +255,7 @@ async def test_share_lab_already_shared_user_is_cancelled_no_op() -> None:
 
 
 async def test_share_lab_confirmation_message_says_accept_or_yes() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared()
 
@@ -231,7 +267,7 @@ async def test_share_lab_confirmation_message_says_accept_or_yes() -> None:
 
 
 async def test_share_lab_confirm_applies_the_edit() -> None:
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = _users_data("alice", "bob")
     client.get_lab.return_value = _lab_with_shared()
     client.edit_lab.return_value = {"status": "success"}
@@ -245,7 +281,7 @@ async def test_share_lab_confirm_applies_the_edit() -> None:
 async def test_share_lab_list_users_data_as_list_shape() -> None:
     # Defensive handling in case list_users' data is ever a list rather
     # than a dict-keyed-by-username shape.
-    client = AsyncMock()
+    client = _pro_client()
     client.list_users.return_value = {
         "status": "success",
         "data": [{"username": "alice"}, {"username": "bob"}],

@@ -12,16 +12,18 @@ EVE-NG's own text, not a value EVE-NG itself returns -- treat it as a
 helpful label, not authoritative data.
 
 `has_image`/`strip_hidden_marker` are built around a separate, more
-reliable signal: EVE-NG appends ".hided" to a template's description when
-no image is installed for it. Confirmed against a live server: every
-template actually in use by a real node lacked this suffix, and it matches
-EVE-NG's documented template-picker behavior (templates with no image are
-hidden from the normal picker).
+reliable signal: EVE-NG appends a suffix to a template's description when
+no image is installed for it. **This suffix differs by edition** --
+confirmed live against both: PRO uses ".hided"; Community uses ".missing"
+(confirmed against a real Community server's full 168-template catalog --
+every template actually installed lacked the suffix, everything else had
+it). Both are recognized here so the same code works unmodified against
+either edition.
 """
 
 from __future__ import annotations
 
-_HIDDEN_SUFFIX = ".hided"
+_HIDDEN_SUFFIXES = (".hided", ".missing")
 
 # Key: a string to match at the start of a template description
 # (case-insensitive). Value: the canonical vendor name to report for it.
@@ -141,24 +143,26 @@ _SORTED_ALIAS_KEYS: list[str] = sorted(_VENDOR_ALIASES, key=len, reverse=True)
 
 
 def strip_hidden_marker(description: str) -> str:
-    """Remove EVE-NG's trailing ".hided" no-image marker, if present."""
-    if description.endswith(_HIDDEN_SUFFIX):
-        return description[: -len(_HIDDEN_SUFFIX)]
+    """Remove EVE-NG's trailing no-image marker, if present -- either
+    edition's convention (see module docstring)."""
+    for suffix in _HIDDEN_SUFFIXES:
+        if description.endswith(suffix):
+            return description[: -len(suffix)]
     return description
 
 
 def has_image(description: str) -> bool:
     """Whether a template (as listed by `list_node_templates`) has an image installed."""
-    return not description.endswith(_HIDDEN_SUFFIX)
+    return not description.endswith(_HIDDEN_SUFFIXES)
 
 
 def extract_vendor(description: str) -> str:
     """Best-effort vendor name from a template description string.
 
-    Strips the ".hided" marker, then checks `_VENDOR_ALIASES` for a
-    case-insensitive prefix match (longest alias first), falling back to
-    the description's first word if nothing matches. Returns "Unknown" for
-    an empty description.
+    Strips the no-image marker (either edition's), then checks
+    `_VENDOR_ALIASES` for a case-insensitive prefix match (longest alias
+    first), falling back to the description's first word if nothing
+    matches. Returns "Unknown" for an empty description.
     """
     text = strip_hidden_marker(description).strip()
     if not text:

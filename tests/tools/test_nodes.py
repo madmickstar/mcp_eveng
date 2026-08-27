@@ -740,20 +740,63 @@ async def test_eve_start_node_all_nodes_every_failure_is_error_status() -> None:
     assert result["status"] == "error"
 
 
-async def test_eve_stop_wipe_export_node_delegate_correctly() -> None:
+async def test_eve_stop_wipe_delegate_correctly() -> None:
     client = make_client(
         stop_node={"status": "success"},
         wipe_node={"status": "success"},
-        export_node={"status": "success"},
     )
 
     await nodes.stop_node(client, "/User1/Lab 1.unl", 1)
     await nodes.wipe_node(client, "/User1/Lab 1.unl", 1)
-    await nodes.export_node(client, "/User1/Lab 1.unl", 1)
 
     client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
     client.wipe_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
+
+
+# -- export_node: PRO/Corporate-only, edition-gated -----------------------------
+
+
+async def test_export_node_delegates_on_pro() -> None:
+    client = make_client(export_node={"status": "success"})
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.5.0-27-PRO"}}
+
+    result = await nodes.export_node(client, "/User1/Lab 1.unl", 1)
+
     client.export_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
+    assert result["status"] == "success"
+
+
+async def test_export_node_rejects_immediately_on_community_edition() -> None:
+    # PRO/Corporate-only, per EVE-NG's own official comparison page and
+    # confirmed live to fail unconditionally on Community -- must reject
+    # before ever calling the underlying client method.
+    client = AsyncMock()
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.2.0-4"}}
+
+    result = await nodes.export_node(client, "/User1/Lab 1.unl", 1)
+
+    assert result["status"] == "error"
+    assert "community" in result["message"].lower()
+    client.export_node.assert_not_awaited()
+
+
+async def test_export_node_rejects_on_missing_version_conservatively() -> None:
+    client = AsyncMock()
+    client.get_status.return_value = {"status": "success", "data": {}}
+
+    result = await nodes.export_node(client, "/User1/Lab 1.unl", 1)
+
+    assert result["status"] == "error"
+    client.export_node.assert_not_awaited()
+
+
+async def test_export_node_all_nodes_delegates_on_pro() -> None:
+    client = make_client(export_node={"status": "success"})
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.5.0-27-PRO"}}
+
+    await nodes.export_node(client, "/User1/Lab 1.unl")
+
+    client.export_node.assert_awaited_once_with("/User1/Lab 1.unl", None)
 
 
 async def test_eve_get_node_interfaces_passes_ids() -> None:
@@ -767,7 +810,7 @@ async def test_eve_get_node_interfaces_passes_ids() -> None:
 # -- connect_interface: interface resolution --------------------------------
 
 
-def test_first_available_ethernet_index_finds_first_unconnected() -> None:
+def test_available_ethernet_interfaces_finds_unconnected_ones() -> None:
     data = {
         "ethernet": [
             {"name": "Gi0/0", "network_id": 1},
@@ -775,86 +818,174 @@ def test_first_available_ethernet_index_finds_first_unconnected() -> None:
             {"name": "Gi0/2", "network_id": 0},
         ]
     }
-    assert nodes._first_available_ethernet_index(data) == 1
+    available = nodes._available_ethernet_interfaces(data)
+    assert [index for index, _ in available] == [1, 2]
 
 
-def test_first_available_ethernet_index_all_connected_returns_none() -> None:
+def test_available_ethernet_interfaces_all_connected_returns_empty() -> None:
     data = {"ethernet": [{"name": "Gi0/0", "network_id": 1}, {"name": "Gi0/1", "network_id": 2}]}
-    assert nodes._first_available_ethernet_index(data) is None
+    assert nodes._available_ethernet_interfaces(data) == []
 
 
-def test_first_available_ethernet_index_treats_string_zero_as_free() -> None:
+def test_available_ethernet_interfaces_treats_string_zero_as_free() -> None:
     data = {"ethernet": [{"name": "Gi0/0", "network_id": "0"}]}
-    assert nodes._first_available_ethernet_index(data) == 0
+    available = nodes._available_ethernet_interfaces(data)
+    assert [index for index, _ in available] == [0]
 
 
-def test_first_available_ethernet_index_missing_or_malformed_data() -> None:
-    assert nodes._first_available_ethernet_index({}) is None
-    assert nodes._first_available_ethernet_index({"ethernet": "not-a-list"}) is None
-    assert nodes._first_available_ethernet_index({"ethernet": []}) is None
+def test_available_ethernet_interfaces_missing_or_malformed_data() -> None:
+    assert nodes._available_ethernet_interfaces({}) == []
+    assert nodes._available_ethernet_interfaces({"ethernet": "not-a-list"}) == []
+    assert nodes._available_ethernet_interfaces({"ethernet": []}) == []
 
 
-def test_resolve_interface_index_none_auto_picks_first_available() -> None:
-    data = {"ethernet": [{"name": "Gi0/0", "network_id": 1}, {"name": "Gi0/1", "network_id": 0}]}
-    index, error = nodes._resolve_interface_index(data, None)
-    assert index == 1
-    assert error is None
-
-
-def test_resolve_interface_index_none_no_free_interface_errors() -> None:
-    data = {"ethernet": [{"name": "Gi0/0", "network_id": 1}]}
-    index, error = nodes._resolve_interface_index(data, None)
-    assert index is None
-    assert "no available" in error
-
-
-def test_resolve_interface_index_explicit_int_in_range() -> None:
+def test_resolve_interface_selection_explicit_int_in_range() -> None:
     data = {"ethernet": [{"name": "Gi0/0"}, {"name": "Gi0/1"}]}
-    index, error = nodes._resolve_interface_index(data, 1)
-    assert index == 1
-    assert error is None
+    result = nodes._resolve_interface_selection(data, 1, "")
+    assert result == {"index": 1}
 
 
-def test_resolve_interface_index_explicit_int_out_of_range() -> None:
+def test_resolve_interface_selection_explicit_int_out_of_range() -> None:
     data = {"ethernet": [{"name": "Gi0/0"}]}
-    index, error = nodes._resolve_interface_index(data, 5)
-    assert index is None
-    assert "out of range" in error
+    result = nodes._resolve_interface_selection(data, 5, "")
+    assert result["status"] == "error"
+    assert "out of range" in result["message"]
 
 
-def test_resolve_interface_index_by_name_case_insensitive() -> None:
-    data = {"ethernet": [{"name": "Gi0/0"}, {"name": "Gi0/1"}]}
-    index, error = nodes._resolve_interface_index(data, "gi0/1")
-    assert index == 1
-    assert error is None
-
-
-def test_resolve_interface_index_by_name_not_found() -> None:
-    data = {"ethernet": [{"name": "Gi0/0"}]}
-    index, error = nodes._resolve_interface_index(data, "Gi0/9")
-    assert index is None
-    assert "no ethernet interface named" in error
-
-
-def test_resolve_interface_index_numeric_string_falls_back_to_index() -> None:
+def test_resolve_interface_selection_digit_string_treated_as_literal_index() -> None:
     data = {"ethernet": [{"name": "eth0"}, {"name": "eth1"}]}
-    index, error = nodes._resolve_interface_index(data, "1")
-    assert index == 1
-    assert error is None
+    result = nodes._resolve_interface_selection(data, "1", "")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_digit_string_out_of_range() -> None:
+    data = {"ethernet": [{"name": "eth0"}]}
+    result = nodes._resolve_interface_selection(data, "5", "")
+    assert result["status"] == "error"
+    assert "out of range" in result["message"]
+
+
+def test_resolve_interface_selection_no_available_interfaces_errors() -> None:
+    data = {"ethernet": [{"name": "Gi0/0", "network_id": 1}]}
+    result = nodes._resolve_interface_selection(data, None, "")
+    assert result["status"] == "error"
+    assert "no available" in result["message"]
+
+
+def test_resolve_interface_selection_none_single_available_resolves_directly() -> None:
+    # Never auto-picks by default when there's a choice -- but with only
+    # one available interface, there's no actual choice to make, so no
+    # prompt is needed.
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 1},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, None, "")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_none_multiple_available_requires_selection() -> None:
+    # This is the actual "no auto-pick-first-available" behavior change:
+    # multiple free interfaces and no interface given must prompt, not
+    # silently pick one.
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, None, "")
+    assert result["status"] == "selection_required"
+    assert result["data"]["matches"] == ["Gi0/0 (index 0)", "Gi0/1 (index 1)"]
+
+
+def test_resolve_interface_selection_search_single_match_resolves_directly() -> None:
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi0/1", "")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_search_is_case_insensitive_substring() -> None:
+    data = {"ethernet": [{"name": "GigabitEthernet0/0", "network_id": 0}]}
+    result = nodes._resolve_interface_selection(data, "gigabit", "")
+    assert result == {"index": 0}
+
+
+def test_resolve_interface_selection_search_scoped_to_available_only() -> None:
+    # A connected interface matching the search string must not show up
+    # -- it isn't a valid target either way.
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 5},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi0", "")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_search_no_match_errors() -> None:
+    data = {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}
+    result = nodes._resolve_interface_selection(data, "Gi0/9", "")
+    assert result["status"] == "error"
+    assert "no available ethernet interface" in result["message"]
+
+
+def test_resolve_interface_selection_search_multiple_matches_requires_selection() -> None:
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+            {"name": "Se1/0", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi", "")
+    assert result["status"] == "selection_required"
+    assert result["data"]["matches"] == ["Gi0/0 (index 0)", "Gi0/1 (index 1)"]
+
+
+def test_resolve_interface_selection_selection_by_number() -> None:
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi", "2")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_selection_by_exact_name() -> None:
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi", "Gi0/1")
+    assert result == {"index": 1}
+
+
+def test_resolve_interface_selection_invalid_selection_is_error() -> None:
+    data = {
+        "ethernet": [
+            {"name": "Gi0/0", "network_id": 0},
+            {"name": "Gi0/1", "network_id": 0},
+        ]
+    }
+    result = nodes._resolve_interface_selection(data, "gi", "zzz")
+    assert result["status"] == "error"
+    assert "Could not match" in result["message"]
 
 
 # -- connect_interface: PRO/Community edition helpers --------------------------
-
-
-def test_is_pro_edition_true_for_pro_suffix() -> None:
-    assert nodes._is_pro_edition({"version": "6.5.0-27-PRO"}) is True
-    assert nodes._is_pro_edition({"version": "6.5.0-27-pro"}) is True  # case-insensitive
-
-
-def test_is_pro_edition_false_for_community_or_missing() -> None:
-    assert nodes._is_pro_edition({"version": "6.5.0-27"}) is False
-    assert nodes._is_pro_edition({}) is False
-    assert nodes._is_pro_edition({"version": ""}) is False
 
 
 async def test_ensure_stopped_for_connection_noop_on_pro() -> None:
@@ -996,7 +1127,60 @@ async def test_connect_interface_requires_exactly_one_target() -> None:
     client.get_status.assert_not_awaited()  # never even checked edition
 
 
-async def test_connect_interface_node_to_node_auto_picks_both_interfaces() -> None:
+async def test_connect_interface_multiple_available_requires_selection_end_to_end() -> None:
+    # Integration-level regression test for the actual behavior change:
+    # multiple free interfaces and no interface given must return
+    # selection_required through the full function, without touching
+    # anything else (edition check, network creation, wiring) -- same
+    # side-effect-free-until-resolved discipline as an interface error.
+    client = AsyncMock()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {
+            "ethernet": [
+                {"name": "Gi0/0", "network_id": 0},
+                {"name": "Gi0/1", "network_id": 0},
+            ]
+        },
+    }
+
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, target_node_id=2)
+
+    assert result["status"] == "selection_required"
+    assert "Node 1" in result["message"]
+    assert result["data"]["matches"] == ["Gi0/0 (index 0)", "Gi0/1 (index 1)"]
+    client.get_node_interfaces.assert_awaited_once()  # never checked node 2's interfaces
+    client.get_status.assert_not_awaited()
+    client.add_lab_network.assert_not_awaited()
+
+
+async def test_connect_interface_selection_by_number_resolves_end_to_end() -> None:
+    client = _pro_client()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {
+            "ethernet": [
+                {"name": "Gi0/0", "network_id": 0},
+                {"name": "Gi0/1", "network_id": 0},
+            ]
+        },
+    }
+    client.add_lab_network.return_value = {"status": "success", "data": {"id": 3}}
+    client.list_lab_networks.return_value = {"status": "success", "data": {"3": {"id": 3}}}
+    client.set_node_interface.return_value = {"status": "success"}
+
+    result = await nodes.connect_interface(
+        client, "/User1/Lab 1.unl", 1, interface_selection="2", network_id=3
+    )
+
+    assert result["status"] == "success"
+    client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 1, 3)
+
+
+async def test_connect_interface_node_to_node_omitted_interface_resolves_when_unambiguous() -> None:
+    # No auto-pick-first-available anymore -- but with exactly one
+    # available interface on each node, there's no actual ambiguity to
+    # prompt about, so it still resolves directly.
     client = _pro_client()
     client.get_node_interfaces.side_effect = [
         {"status": "success", "data": {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}},
@@ -1039,6 +1223,113 @@ async def test_connect_interface_node_to_node_explicit_interfaces() -> None:
         "/User1/Lab 1.unl", network_type="bridge", name="p2p_1_1_2_0"
     )
     client.edit_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", 3, visibility=0)
+
+
+# -- connect_interface: explicit index into an already-connected interface -----
+# Regression tests for a real reported issue: a weaker/smaller model was
+# observed connecting interfaces it wasn't asked to, and sometimes leaving
+# an interface disconnected entirely -- traced to explicit numeric indices
+# silently overwriting an already-connected interface, since that path
+# (unlike the search/omitted paths) was never checked against connection
+# status at all.
+
+
+async def test_connect_interface_explicit_index_already_connected_requires_confirmation() -> None:
+    client = AsyncMock()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {"ethernet": [{"name": "Gi0/0", "network_id": 5}, {"name": "Gi0/1", "network_id": 0}]},
+    }
+
+    result = await nodes.connect_interface(
+        client, "/User1/Lab 1.unl", 1, interface=0, network_id=9
+    )
+
+    assert result["status"] == "confirmation_required"
+    assert "Gi0/0" in result["message"]
+    assert "network 5" in result["message"]
+    # No side effects at all -- not even the edition check, matching the
+    # same discipline as an interface-resolution error.
+    client.get_status.assert_not_awaited()
+    client.set_node_interface.assert_not_awaited()
+    client.add_lab_network.assert_not_awaited()
+
+
+async def test_connect_interface_explicit_index_already_connected_confirm_true_proceeds() -> None:
+    client = _pro_client()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {"ethernet": [{"name": "Gi0/0", "network_id": 5}]},
+    }
+    client.set_node_interface.return_value = {"status": "success"}
+
+    result = await nodes.connect_interface(
+        client, "/User1/Lab 1.unl", 1, interface=0, network_id=9, confirm=True
+    )
+
+    assert result["status"] == "success"
+    client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 0, 9)
+
+
+async def test_connect_interface_explicit_index_free_never_needs_confirmation() -> None:
+    # Baseline: a genuinely free interface at an explicit index never
+    # triggers the new check, confirm defaults to False and still works.
+    client = _pro_client()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {"ethernet": [{"name": "Gi0/0", "network_id": 0}]},
+    }
+    client.set_node_interface.return_value = {"status": "success"}
+
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, interface=0, network_id=9)
+
+    assert result["status"] == "success"
+    client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 0, 9)
+
+
+async def test_connect_interface_target_explicit_index_already_connected_requires_confirmation() -> None:
+    # Same check on the target node's side, node-to-node mode.
+    client = AsyncMock()
+    client.get_node_interfaces.side_effect = [
+        {"status": "success", "data": {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}},
+        {
+            "status": "success",
+            "data": {"ethernet": [{"name": "Gi0/0", "network_id": 7}, {"name": "Gi0/1", "network_id": 0}]},
+        },
+    ]
+
+    result = await nodes.connect_interface(
+        client, "/User1/Lab 1.unl", 1, interface=0, target_node_id=2, target_interface=0
+    )
+
+    assert result["status"] == "confirmation_required"
+    assert "target" in result["message"].lower()
+    assert "network 7" in result["message"]
+    client.get_status.assert_not_awaited()
+    client.set_node_interface.assert_not_awaited()
+    client.add_lab_network.assert_not_awaited()
+
+
+async def test_connect_interface_search_path_never_resolves_to_connected_interface() -> None:
+    # The search/omitted paths are unaffected by this check entirely --
+    # they can never resolve to an already-connected interface in the
+    # first place, by construction, so no confirmation is ever needed there.
+    client = _pro_client()
+    client.get_node_interfaces.return_value = {
+        "status": "success",
+        "data": {
+            "ethernet": [
+                {"name": "Gi0/0", "network_id": 5},  # connected, excluded from search
+                {"name": "Gi0/1", "network_id": 0},  # free, the only match
+            ]
+        },
+    }
+    client.set_node_interface.return_value = {"status": "success"}
+
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, interface="gi", network_id=9)
+
+    assert result["status"] == "success"
+    client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 1, 9)
 
 
 async def test_connect_interface_node_to_node_src_interface_error_stops_before_dst_lookup() -> None:
@@ -1514,7 +1805,11 @@ async def test_change_node_delay_single_node_default_delay_is_ten() -> None:
 
     result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", node_id=9, confirm=True)
 
-    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 9, delay=10)
+    # EVE-NG Community bug workaround: a delay-only edit doesn't flip the
+    # server's internal "modified" flag and is silently rejected, so the
+    # node's own current name is resent alongside delay (see
+    # _with_delay_workaround).
+    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 9, delay=10, name="SW1")
     assert result["status"] == "success"
 
 
@@ -1528,7 +1823,64 @@ async def test_change_node_delay_single_node_explicit_delay() -> None:
 
     await nodes.change_node_delay(client, "/User1/Lab 1.unl", node_id=9, delay=30, confirm=True)
 
-    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 9, delay=30)
+    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 9, delay=30, name="SW1")
+
+
+# -- EVE-NG Community delay-modified-flag bug workaround -----------------
+#
+# Confirmed live: a delay-only edit is silently rejected by EVE-NG
+# Community's own node-edit code (its internal "modified" flag is never
+# set by the delay branch alone), surfacing as a generic "cannot edit
+# node" error. The workaround resends the node's own current name
+# alongside delay, since name unconditionally sets the flag server-side.
+
+
+def test_with_delay_workaround_pads_name_when_delay_is_the_only_field() -> None:
+    current = {"name": "VMX-1", "delay": 0}
+    assert nodes._with_delay_workaround({"delay": 11}, current) == {
+        "delay": 11,
+        "name": "VMX-1",
+    }
+
+
+def test_with_delay_workaround_does_not_override_an_explicit_name() -> None:
+    current = {"name": "VMX-1", "delay": 0}
+    assert nodes._with_delay_workaround({"delay": 11, "name": "NewName"}, current) == {
+        "delay": 11,
+        "name": "NewName",
+    }
+
+
+def test_with_delay_workaround_skips_padding_when_another_flag_field_present() -> None:
+    current = {"name": "VMX-1", "delay": 0}
+    assert nodes._with_delay_workaround({"delay": 11, "left": "200"}, current) == {
+        "delay": 11,
+        "left": "200",
+    }
+
+
+def test_with_delay_workaround_is_a_no_op_without_delay() -> None:
+    current = {"name": "VMX-1", "delay": 0}
+    assert nodes._with_delay_workaround({"icon": "Router.png"}, current) == {
+        "icon": "Router.png",
+    }
+
+
+async def test_edit_lab_node_delay_only_pads_name_in_the_actual_api_call() -> None:
+    client = AsyncMock()
+    client.list_lab_nodes.return_value = {
+        "status": "success",
+        "data": {"name": "VMX-1", "delay": 0, "status": 0},
+    }
+    client.edit_lab_node.return_value = {"status": "success"}
+
+    result = await nodes.edit_lab_node(client, "/User1/Lab 1.unl", 1, delay=11)
+
+    # The actual EVE-NG call is padded with the node's current name...
+    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 1, delay=11, name="VMX-1")
+    # ...but the reported message only mentions what the caller asked to change.
+    assert "delay=11" in result["message"]
+    assert "name=" not in result["message"]
 
 
 async def test_change_node_delay_single_node_stops_if_running() -> None:
@@ -1668,8 +2020,8 @@ async def test_change_node_delay_bulk_by_name_confirm_applies_and_stops_running(
     )
 
     client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)  # only the running one
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=10)
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, delay=20)
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=10, name="SW1")
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, delay=20, name="SW2")
     assert result["status"] == "success"
 
 
@@ -1767,8 +2119,8 @@ async def test_change_node_delay_bulk_order_confirm_applies() -> None:
         client, "/User1/Lab 1.unl", bulk=True, order="2,1", confirm=True
     )
 
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, delay=10)
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=20)
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, delay=10, name="SW2")
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=20, name="SW1")
     assert result["status"] == "success"
 
 

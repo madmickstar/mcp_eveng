@@ -12,6 +12,7 @@ folders and users — all through the EVENG REST API.
 - [Installation](#installation)
 - [Choosing a transport](#choosing-a-transport)
 - [A note on sessions and relogin](#a-note-on-sessions-and-relogin)
+- [PRO vs Community differences](#pro-vs-community-differences)
 - [Configuration](#configuration)
   - [EVENG connection](#eveng-connection-always-used-regardless-of-transport)
   - [MCP network settings](#mcp-network-settings-only-used-with---sse-or---http)
@@ -27,12 +28,16 @@ folders and users — all through the EVENG REST API.
   - [Why `mcp` is pinned below `2.0`](#why-mcp-is-pinned-below-20)
 - [Publishing to PyPI](#publishing-to-pypi)
 - [License](#license)
+- [Tested versions](#tested-versions)
 
 ## Features
 
 - Full coverage of the documented EVENG REST API: auth, system status, node
   templates, network types, folders, users, labs, lab networks, lab nodes
-  (including start/stop/wipe/export), topology, links and pictures.
+  (including start/stop/wipe/export), topology, links and pictures. Plus
+  one PRO/Corporate-only, undocumented endpoint reverse-engineered from a
+  live capture: per-connection link quality (delay/jitter/packet loss/
+  bandwidth) — see `set_link_quality` and `tools/quality.py`.
 - Every destructive tool (delete folder/user/network/node/lab) goes through
   a search -> select -> confirm flow before anything is deleted -- no
   special MCP host capability required (Claude Desktop doesn't support MCP
@@ -50,7 +55,12 @@ folders and users — all through the EVENG REST API.
 
 ## Installation
 
+This project is **not published on PyPI** — install directly from a git
+clone:
+
 ```bash
+git clone https://github.com/madmickstar/mcp_eveng.git
+cd mcp_eveng
 pip install -e .
 ```
 
@@ -117,6 +127,80 @@ happen in exactly the shared-account workflow described above.
 If you're troubleshooting something similar, using a separate, dedicated
 account for this server (rather than sharing your own login) rules this
 class of issue out entirely.
+
+## PRO vs Community differences
+
+EVE-NG's REST API has no explicit "edition" field, but the version string
+`get_status` returns carries a `-PRO` suffix on Professional/Corporate/
+Learning Center tiers (confirmed live: `6.5.0-27-PRO`); plain Community
+builds don't have it (confirmed live: `6.2.0-4`). This is the only
+reliable signal for which edition a server is running, and it's what
+every edition-aware behavior below derives from (`edition.is_pro_edition`).
+An unrecognized or missing version string is treated as Community, the
+more conservative assumption.
+
+Three tools genuinely behave differently by edition — confirmed against
+EVE-NG's own official [features-compare page](https://www.eve-ng.net/index.php/features-compare/),
+live testing, or both:
+
+- **`connect_interface`**: PRO allows wiring interfaces on running nodes;
+  Community requires every node involved stopped first. This tool checks
+  automatically and, on Community only, stops any running node(s)
+  involved before wiring them — you don't need to handle this yourself.
+- **`export_node`**: listed on the official comparison page as a separate
+  toggleable feature ("Export/Import configs or config packs to local
+  PC"). Confirmed live: fails unconditionally on Community — across
+  multiple node types, running and stopped, with and without a saved
+  startup config — while the identical request shape works normally for
+  `start_node`/`stop_node`/`wipe_node` on the same server. This tool
+  checks edition first and returns a clear error immediately on
+  Community, rather than the generic `"Request not valid"` EVE-NG itself
+  gives no useful detail on.
+- **`share_lab`**: listed on the official comparison page as two separate
+  toggleable features ("Shared Lab", "Shared Project"). Confirmed live on
+  Community: `get_lab` never returns a `shared` key at all, and
+  attempting to actually add a share fails with `"Lab has not been
+  modified"` — the request is silently accepted with no effect. Confirmed
+  directly (Community user, not from the official docs): there's no
+  per-lab sharing concept to toggle in the first place — all labs are
+  shared by default. This tool checks edition first and returns a clear
+  error immediately, before wasting a search/select round-trip on a
+  feature that would fail anyway.
+- **`set_link_quality`**: per-connection delay/jitter/packet-loss/bandwidth,
+  set independently on each side. Unlike the three tools above, this
+  isn't a restricted version of a shared feature — it has no Community
+  equivalent at all (confirmed directly by a user: no GUI option exists
+  there), and there's no open-source Community-side code to cross-check
+  against either. There's no documented public API for it — EVE-NG's own
+  API docs don't cover it, and PRO's backend is closed-source — so the
+  request shape in `tools/quality.py` was captured live from a real PRO
+  server's own GUI network traffic, not inferred. One confirmed
+  restriction: a side attached to a network of any kind (not just a
+  literal bridge) can't have its quality set at all — EVE-NG forces it
+  to 0 regardless of what's requested. One open gap: there's no known
+  way to read a connection's *current* quality values via the API, and
+  the endpoint always overwrites both sides' complete state in one
+  request — so this tool requires the far side's current values to be
+  supplied explicitly whenever that side is another node, rather than
+  risk silently resetting them.
+
+The six user-management tools (`list_users`, `get_user`, `add_user`,
+`edit_user`, `delete_user`, `list_user_roles`) are **not** edition-gated —
+confirmed via direct manual testing against a real Community server
+(adding a second admin user) that user management works normally there.
+They're disabled by default on both editions in `tools.env.comm.example`/
+`tools.env.pro.example` alike, for the same general reason (not exposing
+user administration to an LLM by default), not because Community can't
+support it — see "Controlling which tools are exposed" below. An earlier
+version of this section (and of `tools.env.comm.example`) assumed user
+management was Community-unsupported and omitted these tools entirely;
+that assumption was wrong and has been corrected.
+
+A few other confirmed differences worth being aware of, per the same
+official comparison page, though nothing in this project currently
+adjusts behavior for them: node limit per lab (63 on Community vs 1024 on
+PRO/Corporate), and TCP port allocation (fixed 128 per POD on Community
+vs dynamic 1–65000 on PRO/Corporate).
 
 ## Configuration
 
@@ -242,7 +326,7 @@ connect more than one server with overlapping names to the same client.
 | | `edit_lab` | Edits a lab's metadata. |
 | | `share_lab` | Shares a lab with one or more users. |
 | | `move_lab` | Moves a lab to a different folder. |
-| | `delete_lab` | Deletes a lab. Requires user confirmation before it does anything. |
+| | `delete_lab` | Deletes a lab. Requires user confirmation before it does anything. Disabled by default. |
 | | `get_lab_topology` | Gets a lab's node/network topology. |
 | | `get_lab_links` | Gets a lab's link (interface) mappings. |
 | | `list_lab_pictures` | Lists background pictures placed in a lab. |
@@ -279,7 +363,8 @@ design reasoning, and non-obvious behavior — can be found in
 Every tool can be individually enabled or disabled, via a dedicated
 dotenv-syntax config file — kept separate from the main `.env` so tool
 visibility is easy to review and diff independently of connection
-settings. Copy `tools.env.example` to `tools.env` (or point
+settings. Copy **`tools.env.pro.example`** (PRO/Corporate edition) or
+**`tools.env.comm.example`** (Community edition) to `tools.env` (or point
 `MCP_TOOLS_CONFIG_PATH` at wherever you keep it) and set any tool to
 `enabled` or `disabled`:
 
@@ -288,15 +373,36 @@ get_status=enabled
 list_users=disabled
 ```
 
+The two example files list exactly the same tools — full parity, nothing
+omitted from either — and differ only in the *value* of two lines:
+`export_node`/`share_lab` are `enabled` in the PRO file and `disabled` in
+the Community one, since both are PRO/Corporate-only features (see "PRO
+vs Community differences" above) with nothing useful to do on Community.
+Everything else, including the six user-management tools, is listed
+identically in both files: confirmed via direct manual testing against a
+real Community server (adding a second admin user; adding a folder and
+moving a lab into it) that user management and folder/lab operations work
+normally there — they're disabled by default on both editions for the
+same general reason (not exposing user administration to an LLM by
+default), not because Community can't support them. Nothing stops you
+from enabling `export_node`/`share_lab` on Community anyway if you'd
+rather see the tools' own clear edition-check error message than not see
+them at all — they're edition-gated at call time regardless of which file
+you start from.
+
 Any tool not listed in the file defaults to enabled. Any value other than
 `disabled` (case-insensitive) is treated as enabled, so a typo in the file
 fails safe — the tool stays visible rather than silently disappearing.
 
 **The six user-management tools (`list_users`, `get_user`, `add_user`,
-`edit_user`, `delete_user`, `list_user_roles`) are disabled by default**,
-even with no `tools.env` file present at all — EVE-NG user administration
-often isn't something you want exposed to an LLM by default. Set any of
-them to `enabled` in `tools.env` to turn them back on.
+`edit_user`, `delete_user`, `list_user_roles`) plus `delete_lab` are
+disabled by default**, even with no `tools.env` file present at all —
+EVE-NG user administration often isn't something you want exposed to an
+LLM by default, and deleting an entire lab is a more severe,
+harder-to-recover-from action than deleting one thing inside it (unlike
+`delete_folder`/`delete_lab_node`/`delete_lab_network`, all still enabled
+by default). Set any of them to `enabled` in `tools.env` to turn them
+back on.
 
 A disabled tool isn't just hidden with an error if called — it's never
 registered with the MCP server at all, so it doesn't appear in the tool
@@ -314,6 +420,7 @@ mcp-eveng/
 │   ├── config.py        # pydantic-settings, reads .env
 │   ├── confirmation.py  # shared search/select/confirm state machine for deletes
 │   ├── dependencies.py  # shared client singleton
+│   ├── edition.py         # PRO vs Community detection, shared by 3 edition-gated tools
 │   ├── exceptions.py
 │   ├── search.py         # case-insensitive record search (used by delete tools)
 │   ├── telnet.py          # raw asyncio telnet client (IAC handling) for telnet_node
@@ -329,6 +436,7 @@ mcp-eveng/
 │   ├── test_config.py
 │   ├── test_confirmation.py
 │   ├── test_dependencies.py
+│   ├── test_edition.py
 │   ├── test_search.py
 │   ├── test_telnet.py
 │   ├── test_tool_config.py
@@ -336,10 +444,12 @@ mcp-eveng/
 │   ├── test_server.py
 │   └── tools/
 ├── docs/
-│   ├── install-linux.md   # Linux/macOS install, running, Claude Desktop JSON
-│   └── install-windows.md # Windows install, running, Claude Desktop JSON
-├── tools.env.example      # per-tool enable/disable config -- copy to tools.env
-└── .github/workflows/     # CI + PyPI publish
+│   ├── install-linux.md    # Linux/macOS install, running, Claude Desktop JSON
+│   ├── install-windows.md  # Windows install, running, Claude Desktop JSON
+│   └── tools-reference.md  # detailed per-tool design notes (see "Available tools")
+├── tools.env.pro.example   # per-tool enable/disable config, PRO/Corporate -- copy to tools.env
+├── tools.env.comm.example  # same, Community edition (disables 2 PRO-only tools)
+└── .github/workflows/      # CI + PyPI publish
 ```
 
 ## Troubleshooting
@@ -417,3 +527,16 @@ publisher on PyPI's project settings page pointing at this repository and the
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Tested versions
+
+The EVE-NG server versions this project has actually been exercised
+against live, confirmed via each server's own `get_status` response:
+
+- **PRO/Corporate**: `6.5.0-27-PRO`
+- **Community**: `6.2.0-4`
+
+Other versions of either edition likely work too — nothing in this
+project depends on a specific point release beyond the documented
+edition differences (see "PRO vs Community differences") — but these are
+the two actually confirmed.

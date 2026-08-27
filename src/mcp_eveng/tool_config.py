@@ -10,16 +10,24 @@ treated as enabled, so a malformed line fails safe (visible) rather than
 silently hiding a tool.
 
 The six user-management tools (`list_users`, `get_user`, `add_user`,
-`edit_user`, `delete_user`, `list_user_roles`) are disabled by default --
-`_DEFAULT_DISABLED` below -- so a server started with no `tools.env` file
-at all still starts with those hidden, matching this project's stated
-default posture. `telnet_node` sends arbitrary CLI commands to a live
+`edit_user`, `delete_user`, `list_user_roles`) plus `delete_lab` are
+disabled by default -- `_DEFAULT_DISABLED` below -- so a server started
+with no `tools.env` file at all still starts with those hidden, matching
+this project's stated default posture. `delete_lab` is opt-in unlike
+`delete_folder`/`delete_lab_node`/`delete_lab_network` (which all still
+require confirmation, but are enabled by default) since deleting an
+entire lab is a more severe, harder-to-recover-from action than deleting
+one thing inside it. `telnet_node` sends arbitrary CLI commands to a live
 running device's console with no command-safety filtering -- a
 materially different risk profile than the rest of this project's tools,
 which only manage EVE-NG's own lab-topology metadata -- but is enabled by
 default like everything else here; if you'd rather it be opt-in, set
 `telnet_node=disabled` in `tools.env` yourself.
-Copy `tools.env.example` to `tools.env` to change any of this.
+Copy `tools.env.pro.example` (PRO/Corporate edition) or `tools.env.comm.example`
+(Community edition -- disables two PRO/Corporate-only tools,
+`export_node`/`share_lab`, that can't do anything useful there) to
+`tools.env` to change any of this. See the README's "PRO vs Community
+differences" section for why those two specifically differ by edition.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ _DEFAULT_DISABLED = {
     "edit_user",
     "delete_user",
     "list_user_roles",
+    "delete_lab",
 }
 
 
