@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Simplified capture-relay's SSH account model from two dedicated
+  accounts to one, with sudo access granted by group rather than by
+  username.** The original design used two separately-scoped accounts
+  (`mcp-eveng-capture-list` for read-only `docker ps`,
+  `mcp-eveng-capture-relay` for `docker exec ... dumpcap`) on the theory
+  that each process should only ever hold the privilege it actually
+  uses. In practice this added setup complexity (two accounts, two
+  keypairs, two sudoers lines) without a correspondingly large security
+  benefit, since both accounts still only ever reach the same two
+  fixed, narrow docker subcommand shapes -- there was no meaningfully
+  different blast radius between them. Replaced with a single account
+  (`mcp-relay`) and a single group (`capture_relay`); the sudoers rule
+  grants both commands to `%capture_relay` rather than to individual
+  usernames, so `list_captures`/`get_capture` (in the main `mcp-eveng`
+  process) and the relay now authenticate identically -- adding another
+  process or account that needs the same rights later is just adding it
+  to the group, not editing sudoers again. `docs/capture-relay.md`
+  steps 1-2 and the systemd unit's `User=`/`Group=` fields rewritten
+  accordingly; `.env.example` and `.env.capture-relay.example` now show
+  identical `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME`/`_KEY_PATH` values
+  (previously deliberately different, per account).
+- **Replaced the real EVE-NG PRO server IP address (`172.16.130.14`,
+  leaked into the capture-relay docs/env-examples from earlier live
+  testing sessions) with `192.168.1.50`** -- the same placeholder
+  `install-linux.md` already uses for its own `EVENG_HOST` example, for
+  consistency across the project's docs rather than each doc inventing
+  its own example IP.
 - **`import asyncssh` at `ssh_client.py`'s module top level meant the
   entire `mcp-eveng` server crashed at startup for anyone without the
   optional `capture-relay` extra installed -- not just people using

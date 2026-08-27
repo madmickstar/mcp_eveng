@@ -47,60 +47,65 @@ without a personal SSH+sudo account on the EVE-NG box.
                                     │                           unmodified path)
                                     ▼
                     mcp-eveng-capture-relay.service (own systemd unit,
-                    own SSH service account, verifies token, SSHes into
-                    EVE-NG, docker exec ... dumpcap, streams the result
-                    back over plain chunked HTTP) ──▶ Wireshark (-k -i -)
+                    verifies token, SSHes into EVE-NG, docker exec ...
+                    dumpcap, streams the result back over plain chunked
+                    HTTP) ──▶ Wireshark (-k -i -)
 ```
 
-`list_captures`/`get_capture` (in the main `mcp-eveng` process) use a
-**separate** SSH service account from the relay's -- see below --
-purely for `docker ps` discovery; they never touch the capture stream
-itself.
+`list_captures`/`get_capture` (in the main `mcp-eveng` process) and the
+relay authenticate as the **same** SSH account -- see below -- but for
+two different purposes: the main process only ever runs `docker ps`
+(discovery), the relay is the only thing that ever runs `docker exec`.
 
-## 1. Create two dedicated SSH service accounts on the EVE-NG host
+## 1. Create a single dedicated SSH service account + group
 
-Two, not one -- `list_captures` only ever needs read-only `docker ps`;
-giving it `docker exec` rights it never uses would be needless
-privilege. The relay is the only thing that ever runs `docker exec`.
+One account (`mcp-relay`), one group (`capture_relay`) -- both
+processes authenticate as the same account, and sudo access to the
+commands each needs is granted to the *group*, not the username, so
+adding anyone/anything else that needs the same rights later is just
+adding it to the group, not editing sudoers again.
 
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin mcp-eveng-capture-list
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin mcp-eveng-capture-relay
+sudo groupadd capture_relay
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin --groups capture_relay mcp-relay
 
-# Generate a dedicated keypair for each -- do not reuse a personal key.
-sudo -u mcp-eveng-capture-list ssh-keygen -t ed25519 -f /home/mcp-eveng-capture-list/.ssh/id_ed25519 -N ""
-sudo -u mcp-eveng-capture-relay ssh-keygen -t ed25519 -f /home/mcp-eveng-capture-relay/.ssh/id_ed25519 -N ""
+# One keypair, used by both the main process's .env and the relay's own .env.
+sudo -u mcp-relay ssh-keygen -t ed25519 -f /home/mcp-relay/.ssh/id_ed25519 -N ""
 ```
 
 (A `--no-create-home` system account still needs an `.ssh` directory for
-its own key -- create `/home/<user>/.ssh` with `0700` permissions owned
-by that user first if `ssh-keygen` doesn't create it automatically.)
+its own key -- create `/home/mcp-relay/.ssh` with `0700` permissions
+owned by `mcp-relay` first if `ssh-keygen` doesn't create it
+automatically.)
 
-## 2. Scope each account's sudo rights to exactly what it needs
+## 2. Scope the group's sudo rights to exactly what's needed
 
-`/etc/sudoers.d/mcp-eveng-capture` (edit with `visudo -f` to get syntax
-validation):
+`/etc/sudoers.d/mcp-eveng-capture-relay` (edit with `visudo -f` to get
+syntax validation):
 
 ```
-mcp-eveng-capture-list  ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *
-mcp-eveng-capture-relay ALL=(root) NOPASSWD: /usr/bin/docker exec * dumpcap -i eth0 -w -
+%capture_relay ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *, /usr/bin/docker exec * dumpcap -i eth0 -w -
 ```
+
+One rule, both commands, applied to the `%capture_relay` group -- any
+account in that group (just `mcp-relay` for now) can run either.
 
 Confirm the exact path to `docker` on your EVE-NG host first (`which
 docker`) -- sudoers command matching is exact-path, not `$PATH`-aware.
 The `*` wildcards are broader than ideal (sudoers doesn't support
 matching "any container name" more precisely without a wrapper script),
-but each account is still restricted to exactly one specific docker
-subcommand shape, not arbitrary docker access.
+but this is still restricted to exactly these two specific docker
+subcommand shapes, not arbitrary docker access.
 
 ## 3. Configure two SEPARATE `.env` files
 
 **Two example files, two different processes -- don't mix them.**
 Confusing the two is easy since several variable names are shared
-(`CAPTURE_SSH_*`, `CAPTURE_TOKEN_SECRET`) with different *values*, and a
-couple of names look similar but aren't (`CAPTURE_RELAY_LISTEN_*` vs.
-`CAPTURE_RELAY_ADVERTISE_*`) -- both example files below are heavily
-commented specifically to head this off.
+(`CAPTURE_SSH_*`, `CAPTURE_TOKEN_SECRET`) with the SAME *values* now
+(one shared account) but a couple of names look similar and aren't
+(`CAPTURE_RELAY_LISTEN_*` vs. `CAPTURE_RELAY_ADVERTISE_*`) -- both
+example files below are heavily commented specifically to head this
+off.
 
 - **`.env.example`** (project root) → copy to the main `mcp-eveng`
   process's `.env`. Now includes a `list_captures`/`get_capture` section
@@ -111,11 +116,8 @@ commented specifically to head this off.
   different location from the main process's `.env`, even if you keep
   both checkouts under the same parent directory.
 
-The relay's copy needs `CAPTURE_SSH_*` pointed at **its own**, more
-privileged account (`mcp-eveng-capture-relay`, `docker exec` rights) --
-not the same account/key as `list_captures`' `.env` (`mcp-eveng-
-capture-list`, `docker ps` only) -- even though the variable names are
-identical in both files.
+`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME`/`_KEY_PATH` are now **identical**
+in both files -- the same `mcp-relay` account, per step 1.
 
 `CAPTURE_TOKEN_SECRET` **must be the exact same value** in both files --
 generate it once (`openssl rand -hex 32`) and copy it into both, don't
@@ -129,7 +131,7 @@ sudo python3 -m venv .venv
 source .venv/bin/activate
 pip install "/opt/mcp_eveng[capture-relay]"   # from the same source checkout
 deactivate
-sudo chown mcp-eveng-capture-relay:mcp-eveng-capture-relay -R /opt/mcp-eveng-capture-relay
+sudo chown mcp-relay:capture_relay -R /opt/mcp-eveng-capture-relay
 ```
 
 ```bash
@@ -147,10 +149,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# Its own dedicated account (step 1 above) -- deliberately separate from
-# mcp-eveng.service's own account, and from list_captures' account too.
-User=mcp-eveng-capture-relay
-Group=mcp-eveng-capture-relay
+# The shared account/group from step 1 -- deliberately separate from
+# mcp-eveng.service's own account (whatever that's configured as).
+User=mcp-relay
+Group=capture_relay
 
 WorkingDirectory=/opt/mcp-eveng-capture-relay
 ExecStart=/opt/mcp-eveng-capture-relay/.venv/bin/mcp-eveng-capture-relay
@@ -186,8 +188,9 @@ relay can't take the main MCP tool server down, and vice versa.
 
 `list_captures`/`get_capture` ship **disabled by default even on PRO**
 (unlike most PRO-only tools in this project) -- deliberately, since
-they depend on infrastructure (the SSH accounts and the relay service
-above) that doesn't exist until you set it up. Once steps 1-4 are done:
+they depend on infrastructure (the SSH account/group and the relay
+service above) that doesn't exist until you set it up. Once steps 1-4
+are done:
 
 ```bash
 # in /opt/mcp_eveng/tools.env
