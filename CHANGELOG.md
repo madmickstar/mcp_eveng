@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`import asyncssh` at `ssh_client.py`'s module top level meant the
+  entire `mcp-eveng` server crashed at startup for anyone without the
+  optional `capture-relay` extra installed -- not just people using
+  `list_captures`/`get_capture`.** Confirmed live during initial testing
+  of the capture-relay feature (introduced earlier in this same
+  `[Unreleased]` section -- see the `### Added` entry below): `server.py`
+  unconditionally imports every tools module including `capture`
+  regardless of whether its tools are even enabled, and `capture.py`
+  imports `ssh_client.py`, which did `import asyncssh` at the top of the
+  file. A plain `pip install -e .` (the documented base install --
+  `capture-relay` is an opt-in extra) meant `asyncssh` genuinely wasn't
+  present, and the whole server failed with a `ModuleNotFoundError`
+  traceback before any tool, enabled or not, could even be considered.
+  Fixed by moving the `import asyncssh` into `run_command`/
+  `streaming_process` themselves (lazy import) -- the module, and by
+  extension the whole server, now imports fine without it; only actually
+  *calling* `list_captures`/`get_capture` needs it installed. Added a new
+  `ssh_client.is_available()` check, called by both tools before any SSH
+  work, so a genuinely missing dependency now gives a clear, actionable
+  error message instead of a raw traceback. Verified: reproduced the
+  exact failure in a fresh venv with the base install only (confirmed
+  `asyncssh` absent, confirmed `create_server()` and the literal
+  `python -m mcp_eveng --http` command both failed before the fix and
+  succeed after), then added 2 new tests using `sys.modules` manipulation
+  to simulate `asyncssh` genuinely missing (one for `server.py`'s own
+  import chain, one for `ssh_client.py` directly) plus 3 new tests for
+  the friendly-error-message behavior in `tools/capture.py`. Full suite
+  re-run afterwards with zero regressions.
 - **`set_link_quality` no longer requires the far side's current
   quality values to be supplied explicitly.** Previously, changing
   quality on one side of a node-to-node connection required

@@ -67,6 +67,48 @@ async def test_get_capture_refuses_on_community() -> None:
     assert "Community" in result["message"]
 
 
+# -- missing optional dependency (asyncssh) ------------------------------------
+#
+# Regression test: importing tools/capture.py (and therefore server.py,
+# which unconditionally imports every tools module) must NEVER require
+# asyncssh to be installed -- confirmed the hard way on a real test
+# install, where a plain `pip install -e .` (no capture-relay extra)
+# broke the entire mcp-eveng server at startup, not just this feature.
+# ssh_client.py now imports asyncssh lazily; these tests confirm the
+# resulting behavior at the tool level.
+
+
+async def test_list_captures_gives_clear_error_when_asyncssh_missing(monkeypatch) -> None:
+    monkeypatch.setattr(capture._ssh_client, "is_available", lambda: False)
+    client = make_client()
+
+    result = await capture.list_captures(client, ssh_settings())
+
+    assert result["status"] == "error"
+    assert "capture-relay" in result["message"]
+
+
+async def test_get_capture_gives_clear_error_when_asyncssh_missing(monkeypatch) -> None:
+    monkeypatch.setattr(capture._ssh_client, "is_available", lambda: False)
+    client = make_client()
+
+    result = await capture.get_capture(client, ssh_settings(), url_settings(), position=1)
+
+    assert result["status"] == "error"
+    assert "capture-relay" in result["message"]
+
+
+async def test_missing_asyncssh_check_happens_before_community_edition_is_irrelevant() -> None:
+    # The PRO/Community check still takes priority -- a Community server
+    # should report "PRO only", not a dependency error, regardless of
+    # whether asyncssh happens to be installed.
+    client = make_client(COMMUNITY_STATUS)
+
+    result = await capture.list_captures(client, ssh_settings())
+
+    assert "Community" in result["message"]
+
+
 # -- list_captures --------------------------------------------------------------
 
 

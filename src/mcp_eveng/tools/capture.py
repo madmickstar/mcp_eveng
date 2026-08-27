@@ -46,6 +46,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..edition import is_pro_edition
+from ..capture_relay import ssh_client as _ssh_client
 from ..capture_relay.config import CaptureSSHSettings, CaptureURLSettings
 from ..capture_relay.docker_ps import DOCKER_PS_COMMAND, RunningCapture, parse_docker_ps_output
 from ..capture_relay.ssh_client import run_command as _default_run_command
@@ -75,6 +76,27 @@ async def _require_pro(client: EvengClient) -> dict[str, Any] | None:
     return None
 
 
+def _require_asyncssh() -> dict[str, Any] | None:
+    """Checked before any SSH work -- gives a clear, actionable error
+    instead of a raw ModuleNotFoundError bubbling out of an MCP tool
+    call when the optional `capture-relay` extra isn't installed.
+    Confirmed live: importing this module never requires asyncssh
+    (ssh_client.py imports it lazily), but actually calling
+    list_captures/get_capture obviously does."""
+    if not _ssh_client.is_available():
+        return {
+            "status": "error",
+            "message": (
+                "This feature requires the optional 'capture-relay' extra "
+                "-- run `pip install -e \".[capture-relay]\"` (or just "
+                "`pip install asyncssh` for this side; Starlette/uvicorn "
+                "are only needed by the standalone relay itself, not by "
+                "list_captures/get_capture)."
+            ),
+        }
+    return None
+
+
 async def list_captures(
     client: EvengClient,
     ssh_settings: CaptureSSHSettings,
@@ -90,6 +112,9 @@ async def list_captures(
     still come from a recent listing, not a stale one.
     """
     error = await _require_pro(client)
+    if error is not None:
+        return error
+    error = _require_asyncssh()
     if error is not None:
         return error
 
@@ -174,6 +199,9 @@ async def get_capture(
     letting it expire.
     """
     error = await _require_pro(client)
+    if error is not None:
+        return error
+    error = _require_asyncssh()
     if error is not None:
         return error
 

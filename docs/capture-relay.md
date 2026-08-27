@@ -250,6 +250,14 @@ to install it.
 
 - **Unverified against live infrastructure** -- see the status note at
   the top.
+- **The `list_captures`/`get_capture` venv still needs `asyncssh`
+  installed** even though `server.py` itself no longer requires it just
+  to start -- `pip install -e ".[capture-relay]"` (or just `pip install
+  asyncssh`; Starlette/uvicorn are only needed by the relay's own
+  entrypoint, not by these two tools). A missing `asyncssh` now gives a
+  clear error when the tool is actually called, rather than crashing the
+  whole server at startup (confirmed live -- this was a real bug caught
+  during initial testing, fixed by making the `asyncssh` import lazy).
 - **One relay per EVE-NG host in this version** -- `get_capture`'s URL
   always points at `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT`, a single
   fixed address. Multiple EVE-NG servers need their own relay each.
