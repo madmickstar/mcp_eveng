@@ -110,6 +110,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode, and confirming the search path genuinely cannot reach this case
   at all.
 
+### Documentation
+- **Split the confusing single `.env` story for capture-relay into two
+  clearly separate example files** -- `.env.example` (main `mcp-eveng`
+  process) now includes its own `CAPTURE_*` section for
+  `list_captures`/`get_capture`, and a new `.env.capture-relay.example`
+  covers the standalone relay's own, separate `.env`. Previously
+  `docs/capture-relay.md` showed both processes' variables mixed into
+  one code block with prose explaining the split after the fact --
+  confirmed confusing in practice. Both files now cross-reference each
+  other and are heavily commented on which variables are shared by
+  name but need different *values* (`CAPTURE_SSH_*`, pointed at two
+  different, separately-scoped SSH accounts; `CAPTURE_TOKEN_SECRET`,
+  which must be identical) versus which look similar but aren't
+  (`CAPTURE_RELAY_LISTEN_*`, the relay's bind address, vs.
+  `CAPTURE_RELAY_ADVERTISE_*`, read only by the main process to build
+  `capture://` URLs) versus which belong to only one file at all
+  (`EVENG_*`/`MCP_*` never belong in the relay's `.env`;
+  `CAPTURE_TOKEN_TTL_SECONDS`/`CAPTURE_SSH_TIMEOUT_SECONDS` are read
+  only by `list_captures`/`get_capture`, never by the relay, even
+  though nothing stops them being set there).
+
 ### Added
 - **`list_captures`/`get_capture`: new PRO/Corporate-only tools, plus a
   standalone `mcp-eveng-capture-relay` systemd service and a Windows

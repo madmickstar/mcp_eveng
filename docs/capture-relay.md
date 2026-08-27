@@ -93,36 +93,33 @@ matching "any container name" more precisely without a wrapper script),
 but each account is still restricted to exactly one specific docker
 subcommand shape, not arbitrary docker access.
 
-## 3. Configure `.env` (shared by both processes if colocated)
+## 3. Configure two SEPARATE `.env` files
 
-```bash
-# -- list_captures' account --
-CAPTURE_SSH_HOST=172.16.130.14
-CAPTURE_SSH_USERNAME=mcp-eveng-capture-list
-CAPTURE_SSH_KEY_PATH=/home/mcp-eveng-capture-list/.ssh/id_ed25519
-# CAPTURE_SSH_KNOWN_HOSTS=/etc/mcp-eveng/known_hosts   # set this for anything beyond a lab -- see config.py
+**Two example files, two different processes -- don't mix them.**
+Confusing the two is easy since several variable names are shared
+(`CAPTURE_SSH_*`, `CAPTURE_TOKEN_SECRET`) with different *values*, and a
+couple of names look similar but aren't (`CAPTURE_RELAY_LISTEN_*` vs.
+`CAPTURE_RELAY_ADVERTISE_*`) -- both example files below are heavily
+commented specifically to head this off.
 
-CAPTURE_TOKEN_SECRET=<a long random string -- e.g. `openssl rand -hex 32`>
-# CAPTURE_TOKEN_TTL_SECONDS=60   # default; how long a get_capture URL stays valid
+- **`.env.example`** (project root) → copy to the main `mcp-eveng`
+  process's `.env`. Now includes a `list_captures`/`get_capture` section
+  in addition to the existing `EVENG_*`/`MCP_*` variables.
+- **`.env.capture-relay.example`** (project root) → copy to the
+  standalone relay's own `.env`, in whatever `WorkingDirectory` its
+  systemd unit uses (e.g. `/opt/mcp-eveng-capture-relay/.env`) -- a
+  different location from the main process's `.env`, even if you keep
+  both checkouts under the same parent directory.
 
-# -- the relay's own listen/advertise address --
-CAPTURE_RELAY_LISTEN_HOST=0.0.0.0        # bind address
-CAPTURE_RELAY_LISTEN_PORT=8001
-CAPTURE_RELAY_ADVERTISE_HOST=172.16.130.14  # what the .bat actually connects to
-CAPTURE_RELAY_ADVERTISE_PORT=8001
-```
+The relay's copy needs `CAPTURE_SSH_*` pointed at **its own**, more
+privileged account (`mcp-eveng-capture-relay`, `docker exec` rights) --
+not the same account/key as `list_captures`' `.env` (`mcp-eveng-
+capture-list`, `docker ps` only) -- even though the variable names are
+identical in both files.
 
-**The relay itself uses the SAME `CAPTURE_SSH_*` variable names**, but
-needs them pointed at the *relay's* account instead
-(`mcp-eveng-capture-relay`, its own key) -- if both processes read the
-same `.env` file, put the relay in its own separate `.env` (e.g.
-`/opt/mcp-eveng-capture-relay/.env`) with its own `WorkingDirectory`,
-rather than trying to make one `.env` serve two different SSH
-identities under the same variable names.
-
-`CAPTURE_TOKEN_SECRET` **must be identical** in both `.env` files --
-it's the shared HMAC secret `get_capture` signs with and the relay
-verifies against.
+`CAPTURE_TOKEN_SECRET` **must be the exact same value** in both files --
+generate it once (`openssl rand -hex 32`) and copy it into both, don't
+generate it twice.
 
 ## 4. Install and enable the relay as its own systemd service
 
