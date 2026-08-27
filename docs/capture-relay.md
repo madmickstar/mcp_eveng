@@ -57,28 +57,74 @@ relay authenticate as the **same** SSH account -- see below -- but for
 two different purposes: the main process only ever runs `docker ps`
 (discovery), the relay is the only thing that ever runs `docker exec`.
 
-## 1. Create a single dedicated SSH service account + group
+## 1. Create the SSH service account + group -- ON THE EVE-NG HOST
 
-One account (`mcp-relay`), one group (`capture_relay`) -- both
-processes authenticate as the same account, and sudo access to the
-commands each needs is granted to the *group*, not the username, so
-adding anyone/anything else that needs the same rights later is just
-adding it to the group, not editing sudoers again.
+**On the EVE-NG host itself.** One account (`mcp-relay`), one group
+(`capture_relay`) -- both processes authenticate as the same account,
+and sudo access to the commands each needs is granted to the *group*,
+not the username, so adding anyone/anything else that needs the same
+rights later is just adding it to the group, not editing sudoers again.
 
 ```bash
 sudo groupadd capture_relay
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin --groups capture_relay mcp-relay
-
-# One keypair, used by both the main process's .env and the relay's own .env.
-sudo -u mcp-relay ssh-keygen -t ed25519 -f /home/mcp-relay/.ssh/id_ed25519 -N ""
+sudo useradd --system --create-home --shell /bin/bash --groups capture_relay mcp-relay
 ```
 
-(A `--no-create-home` system account still needs an `.ssh` directory for
-its own key -- create `/home/mcp-relay/.ssh` with `0700` permissions
-owned by `mcp-relay` first if `ssh-keygen` doesn't create it
-automatically.)
+**Use a real shell (`/bin/bash` above), not `/usr/sbin/nologin`.**
+`nologin` doesn't just block interactive sessions -- it refuses to
+execute *any* command handed to it over SSH at all, including the
+one-off `docker ps`/`docker exec` calls both `list_captures` and the
+relay need. Authenticating with a key still succeeds either way (auth
+and shell-invocation are separate steps), so a `nologin` shell won't
+stop you from *connecting* -- it'll fail right after, with `"This
+account is currently not available"` -- OpenSSH's own message for
+exactly this shell, not a permissions or key problem. A real shell
+plus tightly-scoped sudo (step 2) is the actual way to restrict what
+this account can do; the shell isn't the place to enforce that.
 
-## 2. Scope the group's sudo rights to exactly what's needed
+`--create-home` (rather than `--no-create-home`, this doc's earlier
+revision) sets up `/home/mcp-relay` and its `.ssh` directory
+automatically, avoiding a manual `mkdir`/`chmod` step.
+
+## 2. Generate a keypair -- ON WHICHEVER MACHINE(S) RUN mcp-eveng/the relay
+
+**Not on the EVE-NG host.** The private key needs to live wherever the
+process actually connecting *from* runs -- if `mcp-eveng` and the relay
+run on different machines from each other (or from the EVE-NG host
+itself), each needs its own copy of the private key locally, at
+whatever path `CAPTURE_SSH_KEY_PATH` in its own `.env` points to. Only
+the **public** half ever needs to reach the EVE-NG host.
+
+Linux/macOS:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/mcp-relay -N ""
+```
+
+Windows (PowerShell, using OpenSSH's client -- included by default on
+Windows 10 1803+/11):
+
+```powershell
+ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\mcp-relay -N '""'
+```
+
+Then, back **on the EVE-NG host**, append the resulting *public* key
+(the `.pub` file's contents -- one line) to `mcp-relay`'s own
+`authorized_keys`:
+
+```bash
+sudo -u mcp-relay bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "PASTE_THE_PUBLIC_KEY_LINE_HERE" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+```
+
+If `mcp-eveng` and the relay run on the same machine as each other (but
+still separate from the EVE-NG host), one keypair covers both -- point
+both `.env` files' `CAPTURE_SSH_KEY_PATH` at the same local private key
+file. If they run on genuinely different machines, generate a separate
+keypair per machine and append each one's public half to the same
+`authorized_keys` file on the EVE-NG host (one `>>` per key -- multiple
+keys can coexist in one account's `authorized_keys`, one per line).
+
+## 3. Scope the group's sudo rights to exactly what's needed
 
 `/etc/sudoers.d/mcp-eveng-capture-relay` (edit with `visudo -f` to get
 syntax validation):
@@ -97,7 +143,7 @@ matching "any container name" more precisely without a wrapper script),
 but this is still restricted to exactly these two specific docker
 subcommand shapes, not arbitrary docker access.
 
-## 3. Configure two SEPARATE `.env` files
+## 4. Configure two SEPARATE `.env` files
 
 **Two example files, two different processes -- don't mix them.**
 Confusing the two is easy since several variable names are shared
@@ -116,14 +162,18 @@ off.
   different location from the main process's `.env`, even if you keep
   both checkouts under the same parent directory.
 
-`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME`/`_KEY_PATH` are now **identical**
-in both files -- the same `mcp-relay` account, per step 1.
+`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are now **identical** in both
+files -- the same `mcp-relay` account, per step 1. `CAPTURE_SSH_KEY_PATH`
+is NOT necessarily identical -- it's a local path on whichever machine
+each process actually runs on (see step 2), so it only matches if
+`mcp-eveng` and the relay happen to run on the same machine as each
+other.
 
 `CAPTURE_TOKEN_SECRET` **must be the exact same value** in both files --
 generate it once (`openssl rand -hex 32`) and copy it into both, don't
 generate it twice.
 
-## 4. Install and enable the relay as its own systemd service
+## 5. Install and enable the relay as its own systemd service
 
 ```bash
 cd /opt/mcp-eveng-capture-relay   # separate checkout/venv from mcp-eveng.service's
@@ -184,12 +234,12 @@ sudo systemctl enable mcp-eveng-capture-relay.service
 Independent of `mcp-eveng.service` entirely -- a crash or hang in the
 relay can't take the main MCP tool server down, and vice versa.
 
-## 5. Enable the tools on the main mcp-eveng process
+## 6. Enable the tools on the main mcp-eveng process
 
 `list_captures`/`get_capture` ship **disabled by default even on PRO**
 (unlike most PRO-only tools in this project) -- deliberately, since
 they depend on infrastructure (the SSH account/group and the relay
-service above) that doesn't exist until you set it up. Once steps 1-4
+service above) that doesn't exist until you set it up. Once steps 1-5
 are done:
 
 ```bash
@@ -198,7 +248,7 @@ list_captures=enabled
 get_capture=enabled
 ```
 
-## 6. The `.bat` companion and Windows registration
+## 7. The `.bat` companion and Windows registration
 
 `scripts/eve-capture.bat` -- parses the `capture://` URL's `mode`
 field and branches: `mode=pro` tries curl against the relay first

@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `mcp-relay` service account's shell was set to
+  `/usr/sbin/nologin`, which blocks SSH from executing ANY command
+  through that account -- not just interactive sessions.** Confirmed
+  live: authenticating with the account's key still succeeds (auth and
+  shell-invocation are separate steps), but the account then fails
+  every actual command with `"This account is currently not
+  available"` -- OpenSSH's own message for a `nologin` shell, not a
+  permissions problem. This directly broke both `list_captures`'
+  `docker ps` and the relay's `docker exec` calls; the account is now
+  created with `--shell /bin/bash` (restricting what it can do is
+  sudo's job -- see the group-based sudoers rule -- not the shell's).
+  Also switched `--no-create-home` to `--create-home`, so the account's
+  home directory and `.ssh` folder exist automatically instead of
+  needing a manual `mkdir`/`chmod` step.
+  **Separately, the setup steps had the keypair generated in the wrong
+  place entirely:** `ssh-keygen` was run as the `mcp-relay` account
+  *on the EVE-NG host*, putting both halves of the keypair there --
+  but the private key needs to live wherever `mcp-eveng`/the relay
+  actually run (a different machine from the EVE-NG host in general;
+  confirmed a real gap against an actual test setup running the main
+  process on Windows while `CAPTURE_SSH_HOST` pointed at a separate
+  Linux box). Only the public half belongs on the EVE-NG host. Rewrote
+  `docs/capture-relay.md` steps 1-2 to clearly separate "done once, on
+  the EVE-NG host" (account/group creation) from "done per machine
+  actually running mcp-eveng/the relay" (keypair generation, for both
+  Linux and Windows), and added the missing step of appending the
+  public key to `mcp-relay`'s own `authorized_keys` on the EVE-NG host
+  -- this was never spelled out at all in the previous version of this
+  doc. Corrected `.env.example`/`.env.capture-relay.example`'s
+  `CAPTURE_SSH_KEY_PATH` example and comments to match (a local path on
+  whichever machine that process runs on, not `/home/mcp-relay/...`
+  which only makes sense on the EVE-NG host itself) and corrected an
+  overclaim in this same `[Unreleased]` section's own prior entry below
+  (`_KEY_PATH` isn't necessarily identical between the two `.env`
+  files, only `_HOST`/`_PORT`/`_USERNAME` are). All references to step
+  numbers elsewhere in the doc/env files updated for the doc going from
+  6 steps to 7.
 - **Simplified capture-relay's SSH account model from two dedicated
   accounts to one, with sudo access granted by group rather than by
   username.** The original design used two separately-scoped accounts
@@ -27,8 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the group, not editing sudoers again. `docs/capture-relay.md`
   steps 1-2 and the systemd unit's `User=`/`Group=` fields rewritten
   accordingly; `.env.example` and `.env.capture-relay.example` now show
-  identical `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME`/`_KEY_PATH` values
-  (previously deliberately different, per account).
+  identical `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` values (previously
+  deliberately different, per account) -- `_KEY_PATH` was also wrongly
+  shown as identical in this entry's first version; see the next
+  `### Fixed` entry above for the correction.
 - **Replaced the real EVE-NG PRO server IP address (`172.16.130.14`,
   leaked into the capture-relay docs/env-examples from earlier live
   testing sessions) with `192.168.1.50`** -- the same placeholder
