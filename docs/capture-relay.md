@@ -4,16 +4,19 @@ Streams an EVE-NG PRO capture (started from the GUI's right-click
 "Capture" menu, same as always) to a local Wireshark, without every
 analyst needing their own personal SSH+sudo account on the EVE-NG host.
 
-**Status: fully implemented (59 tests across `capture_relay/` and
-`tools/capture.py`, plus a written `.bat` companion), but not yet
-exercised against a live EVE-NG server.** The token scheme, `docker ps`
-parsing, URL building, and the relay's HTTP/streaming logic are all
-tested directly; the actual SSH connections (`ssh_client.py`'s
-`run_command`/`streaming_process`) are thin wrappers around `asyncssh`
-that this project's test environment has no way to exercise live, and
-`scripts/eve-capture.bat` can't be run/verified outside a real Windows
-machine at all. Treat this as ready for a supervised first end-to-end
-test, not yet a proven production path.
+**Status: `list_captures`/`get_capture` confirmed working live (v0.3.8).
+The `.bat` companion is in active live testing** -- one real bug found
+and fixed so far (the `&` query separator broke under `cmd.exe`, and
+`mode=` detection has been replaced with path-pattern detection
+entirely; see the `### Fixed` entries in `CHANGELOG.md`). 73 tests
+across `capture_relay/` and `tools/capture.py` cover the token scheme,
+`docker ps` parsing, URL building (including the path-pattern
+detection and `;` separator), and the relay's HTTP/streaming logic
+directly. What's still unverified: the `.bat`'s curl-relay path and
+its plink fallback haven't been confirmed working end-to-end yet (only
+the mode-detection/parsing layer has been tested live so far), and the
+Community-mode command block is still a reconstruction from a prose
+description, not copied from a real working file.
 
 Community needs none of this -- its own GUI already generates working
 `capture://` links with no MCP involvement at all.
@@ -54,7 +57,7 @@ without a personal SSH+sudo account on the EVE-NG box.
 │ > Capture  │  container │  container   │   URL (from   │ (registered      │
 └───────────┘             └───────────────┘   get_capture)│ against capture://)│
                                                             └─────────┬────────┘
-                                                    mode=pro │ mode=community
+                                              vunl*/pnet*? no │ yes
                                     ┌───────────────────────┘         │
                                     ▼                                 ▼
                           curl (primary) or plink (fallback)   plink (existing,
@@ -373,15 +376,28 @@ get_capture=enabled
 
 ## 7. The `.bat` companion and Windows registration
 
-`scripts/eve-capture.bat` -- parses the `capture://` URL's `mode`
-field and branches: `mode=pro` tries curl against the relay first
-(no SSH credentials needed on the client at all), falling back to
-plink straight into `eveng_host` only if curl or the relay is
-unreachable (using the user's own already-configured SSH access via
-the sudoers-scoped group from your *original* setup -- no password
-ever appears in the URL either way). No `mode` at all (Community's
-existing link shape) skips all of the above entirely and runs
-unmodified.
+`scripts/eve-capture.bat` -- distinguishes Community's own links from
+this project's by **path pattern**, not a query field (confirmed live:
+Community's device names always start `vunl` or `pnet`; this project's
+own container names never do, and EVE-NG has no "mode" concept of its
+own -- an earlier version of this script relied on an invented
+`mode=pro` query field instead, which turned out to be an unnecessary
+point of failure -- see the note on query separators below). A
+`vunl*`/`pnet*` path skips everything below entirely and runs
+Community's existing, unmodified flow. Anything else tries curl
+against the relay first (no SSH credentials needed on the client at
+all), falling back to plink straight into `eveng_host` only if curl or
+the relay is unreachable (using the user's own already-configured SSH
+access via the sudoers-scoped group from your *original* setup -- no
+password ever appears in the URL either way).
+
+**Query fields are separated by `;`, not `&`.** Confirmed live: `&`
+broke parsing here -- `cmd.exe` (always the interpreter for a `.bat`
+file, however it's invoked) treats an unescaped `&` in a command line
+as a command separator. Community's own links never hit this, since
+they never carry a query string at all; this project's own
+multi-field query string was the first `capture://` link ever built
+with `&` in it, and broke exactly where you'd expect.
 
 **Edit the top of the script before deploying it:**
 

@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`list_captures`/`get_capture` confirmed working live.** The earlier
+  `docker ps`/`docker exec` sudo and `ProtectHome` fixes, plus the
+  restored group-based sudoers, are all confirmed live rather than
+  just reasoned through -- `list_captures` now returns real results
+  against a live EVE-NG PRO server.
+- **The `.bat` companion's `mode=pro` query field broke live, and its
+  root cause led to redesigning the whole detection scheme rather than
+  patching the symptom.** Confirmed live: the query string ended up
+  with `mode` parsed as an empty string despite `get_capture` always
+  including `mode=pro` in the URL it builds. Root cause: `&` (used as
+  the query-field separator, matching ordinary HTTP convention) is a
+  command separator in `cmd.exe`, which is *always* the interpreter
+  for a `.bat` file however it's invoked -- an unescaped `&` in the
+  argument corrupts everything after it, and Community's own links had
+  never hit this before since they never carried a query string at
+  all; this project's own multi-field query string was the first
+  `capture://` link ever built with `&` in it. Per direct feedback
+  (confirmed live: Community's own device names always start `vunl` or
+  `pnet`, a second shape beyond the single example seen earlier),
+  redesigned mode detection to use the URL's own path pattern instead
+  of an invented `mode=` field at all -- `vunl*`/`pnet*` in the path
+  position means Community's existing, unmodified flow; anything else
+  (this project's own `Capture-<pid>`-style container names) means the
+  relay flow. Also switched the query separator itself from `&` to `;`
+  (not one of `cmd.exe`'s special characters: `& | < > ^ ( ) % !`) for
+  the fields that remain (`token`/`relay_port`/`eveng_host`). New
+  `is_community_style_path()` in `url.py` for the path-pattern check;
+  `urllib.parse.urlencode` has no option to change its separator from
+  `&`, so the query string is now built by hand, and parsed back with
+  `parse_qs`'s own `separator=` parameter (a real, standard-library
+  option, not project-specific) to match. `.bat` rewritten to match:
+  substring-prefix check instead of query parsing for mode detection,
+  `;`-based query splitting for the remaining fields, and `pause` added
+  on every error path so the window stays open to read the message
+  (matching debugging pauses added by hand during live testing) rather
+  than flashing closed immediately, which is how the original bug was
+  even readable enough to report in the first place. 14 tests in
+  `test_url.py` rewritten/added for the new scheme (path-pattern
+  matching for both `vunl*` and `pnet*`, confirming `;` not `&` appears
+  in the built URL, confirming no `mode=` field exists at all); full
+  suite re-run afterwards with zero regressions. The curl-relay path,
+  its plink fallback, and the Community-mode command block itself
+  (still a reconstruction, not copied from a real file) remain
+  unverified live -- see the updated status note at the top of
+  `docs/capture-relay.md`.
 - **Restored group-based sudoers on the EVE-NG host, per direct
   feedback that this got lost in an earlier consolidation.** The
   v0.3.3-v0.3.5 sequence collapsed a two-account design down to a

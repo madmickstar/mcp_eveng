@@ -32,10 +32,11 @@ than a node_id/interface.
 `get_capture` mints a short-lived, single-container-scoped token (see
 `tokens.py`) and returns a `capture://` URL (see `url.py`) carrying it.
 The `.bat` companion registered against `capture://` on the client's
-machine parses that URL, and (for a `mode=pro` link) tries curl against
-the relay first, falling back to plink straight into the EVE-NG host
-(via the user's own already-configured SSH access) if curl or the relay
-is unreachable. No password ever appears in the URL either way.
+machine parses that URL, distinguishes it from Community's own links by
+path pattern (see `url.py`'s `is_community_style_path`), and tries curl
+against the relay first, falling back to plink straight into the EVE-NG
+host (via the user's own already-configured SSH access) if curl or the
+relay is unreachable. No password ever appears in the URL either way.
 """
 
 from __future__ import annotations
