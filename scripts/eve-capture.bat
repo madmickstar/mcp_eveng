@@ -8,14 +8,18 @@ REM ** UNTESTED end-to-end on a real Windows machine as of writing --
 REM ** confirmed live so far: (1) the & query separator broke parsing
 REM ** under cmd.exe, (2) even after switching to ;, the argument still
 REM ** came through truncated. Both fixed by dropping the query string
-REM ** entirely for plain /-separated path segments (see below) --
-REM ** confirmed live that THIS version parses correctly all the way
-REM ** through to reaching curl. Not yet confirmed: an actual successful
-REM ** stream all the way through to Wireshark (the one live test run so
-REM ** far hit a relay connection timeout, a separate infrastructure
-REM ** issue -- see docs/capture-relay.md -- not a script bug), and the
-REM ** plink fallback / Community-mode paths haven't been exercised live
-REM ** at all yet.
+REM ** entirely for plain /-separated path segments (see below). (3) A
+REM ** binary encoding bug in the relay itself (fixed separately, see
+REM ** capture_relay/ssh_client.py). A real capture has now reached
+REM ** Wireshark successfully at least once -- which of curl/relay vs.
+REM ** the plink fallback actually delivered it is still being confirmed
+REM ** (see docs/capture-relay.md); plink was also missing its -i key
+REM ** flag entirely until just now, so if it WAS the fallback that
+REM ** delivered it, that specific run must have used a different auth
+REM ** method (e.g. Pageant) than what this script explicitly passed.
+REM ** Community mode's actual command block below is copied from a
+REM ** real, working Community .bat (not reconstructed) but hasn't been
+REM ** exercised through THIS wrapper script live yet.
 REM
 REM Two link shapes, distinguished by the FIRST path segment, not a
 REM query field -- EVE-NG has no "mode" concept of its own; that was
@@ -32,10 +36,22 @@ REM CONFIGURE THESE FOR YOUR ENVIRONMENT:
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
 set PLINK=C:\Path\To\plink.exe
 set COMMUNITY_SSH_USER=eve-capture-user
-REM Community's plink invocation below is reconstructed from a prose
-REM description of an existing working setup, not copied from the real
-REM file -- replace this block with your actual existing Community
-REM .bat's plink command if it differs at all.
+REM plink has no single flag that means "use this OpenSSH-format key
+REM automatically" the way ssh does -- it needs an explicit -i pointing
+REM at a private key file (PuTTY's own .ppk format; convert an
+REM OpenSSH-format key with puttygen first if that's what you generated
+REM in docs/capture-relay.md step 2). Key-based auth is the default
+REM below; a commented-out password-based alternative (matching the
+REM original Community .bat's own approach) is included at each plink
+REM call if you'd rather use that instead -- uncomment ONE line, leave
+REM the other commented, don't run both.
+set COMMUNITY_SSH_KEY=C:\Path\To\private-key.ppk
+REM set PASSWORD=your-password-here
+REM
+REM Community's plink invocation below is copied from a real, working
+REM Community .bat (tcpdump, not docker -- Community's own SSH account
+REM apparently doesn't need sudo for this, unlike this project's own
+REM dedicated relay-fallback account above).
 
 set "FULLURL=%~1"
 
@@ -126,8 +142,18 @@ if "%HAVECURL%"=="1" (
     REM status line -- present only if the relay genuinely accepted the
     REM token and started responding, regardless of which timeout
     REM curl's own exit code reflects.
+    REM
+    REM Confirmed live that 3s/5s was too tight: the relay's full
+    REM round-trip (SSH connect + sudo + docker exec + dumpcap startup)
+    REM took long enough that a genuinely-working relay still missed
+    REM this window -- observed a preflight timeout at ~3004ms followed
+    REM immediately by Wireshark receiving a real, successful capture
+    REM moments later (via the real, unbounded stream call below, which
+    REM has no such tight deadline). Widened accordingly; adjust further
+    REM if your own environment's round-trip is consistently slower or
+    REM faster than this.
     set "HDRFILE=%TEMP%\eve_capture_preflight_%RANDOM%.tmp"
-    curl.exe -s -S --connect-timeout 3 --max-time 5 -D "!HDRFILE!" -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
+    curl.exe -s -S --connect-timeout 5 --max-time 10 -D "!HDRFILE!" -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
     if exist "!HDRFILE!" (
         findstr /C:" 200 " "!HDRFILE!" >nul 2>nul
         if !ERRORLEVEL!==0 set "CURLOK=1"
@@ -152,7 +178,10 @@ if not exist "%PLINK%" (
     pause
     exit /b 1
 )
-"%PLINK%" -ssh %COMMUNITY_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
+"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
+REM Password-based alternative -- uncomment this line and comment out
+REM the one above if you'd rather authenticate this way instead:
+REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
 if %ERRORLEVEL% neq 0 (
     echo plink/dumpcap path also failed.
     pause
@@ -161,13 +190,26 @@ exit /b %ERRORLEVEL%
 
 :community_mode
 REM ---------------------------------------------------------------------
-REM Community mode: existing, unmodified behaviour. URLHOST is the
-REM EVE-NG host; URLPATH is the vunl-/pnet-style device name. Reconstructed
-REM from a prose description of an existing working setup -- replace this
-REM block with the real, already-working Community .bat command if this
-REM doesn't match it exactly.
+REM Community mode: existing, unmodified behaviour -- this block is
+REM copied from a real, working Community .bat, not reconstructed.
+REM URLHOST is the EVE-NG host; URLPATH is the vunl-/pnet-style device
+REM name. Confirmed detail from that real script: no sudo (Community's
+REM SSH account apparently doesn't need it for this, unlike this
+REM project's own dedicated relay-fallback account above); `-U`
+REM (unbuffered output -- important for a live stream, not a completed
+REM capture) and `-s 0` (snaplen 0, capture the full packet, no
+REM truncation) on tcpdump; and a `not port 22` filter specifically
+REM when the interface is exactly "pnet0" -- presumably to exclude the
+REM SSH session's own traffic from a capture on an interface that
+REM happens to carry it too, avoiding a feedback loop.
 REM ---------------------------------------------------------------------
-"%PLINK%" -ssh %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -i %URLPATH% -w -" | "%WIRESHARK%" -k -i -
+set "FILTER="
+if "%URLPATH%"=="pnet0" set "FILTER= not port 22"
+
+"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
+REM Password-based alternative -- uncomment this line and comment out
+REM the one above if you'd rather authenticate this way instead:
+REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 if %ERRORLEVEL% neq 0 (
     echo Community capture path failed.
     pause

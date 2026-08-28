@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `.bat`'s plink invocations never actually pointed at a private
+  key -- `plink` has no equivalent to `ssh`'s automatic key discovery,
+  and this project's own key-based auth setup (`docs/capture-relay.md`
+  step 2) was silently unusable through either plink call as a result.**
+  Added `-i "%COMMUNITY_SSH_KEY%"` to both the PRO-fallback and
+  Community-mode plink commands, plus a `COMMUNITY_SSH_KEY` variable
+  to configure, and a commented-out `-pw`-based alternative at each
+  call (matching the original Community `.bat`'s own approach) for
+  anyone who'd rather use password auth instead.
+- **Replaced the reconstructed Community-mode command block with the
+  real, working one, copied directly from an existing Community `.bat`
+  rather than guessed from a prose description.** Confirmed real
+  differences from the earlier reconstruction: no `sudo` at all
+  (Community's SSH account apparently doesn't need it for this, unlike
+  this project's own dedicated relay-fallback account, which still
+  does); `tcpdump -U -s 0` (unbuffered output -- important for a live
+  stream, not a completed capture -- and snaplen 0, capturing the full
+  packet); and a `not port 22` filter applied specifically when the
+  interface is exactly `pnet0` (excluding the SSH session's own
+  traffic from a capture on an interface that happens to carry it too).
+- **Widened the curl preflight's timeout window (`--connect-timeout`
+  3s->5s, `--max-time` 5s->10s) after live evidence it was too tight
+  for a genuinely-working relay.** Observed live: a preflight timeout
+  at ~3004ms immediately followed by Wireshark receiving a real,
+  successful capture moments later via the separate, unbounded
+  streaming call -- meaning the relay's actual round-trip (SSH connect
+  + sudo + `docker exec` + `dumpcap` startup) legitimately took longer
+  than the old window without anything being broken. This is also the
+  first confirmed case of a real capture reaching Wireshark
+  successfully end-to-end, though which code path actually delivered
+  it (the real curl stream, vs. the plink fallback) isn't fully
+  confirmed -- plink's missing `-i` flag (see above) makes a
+  successful fallback in that same run less likely than the real
+  stream having worked despite the tight preflight, but this isn't
+  certain either way.
 - **The relay crashed with `asyncssh.misc.ProtocolError: 'utf-8' codec
   can't decode byte ... invalid continuation byte` the moment a real
   capture actually reached it.** Confirmed live, with a full stack
