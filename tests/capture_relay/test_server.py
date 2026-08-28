@@ -7,7 +7,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from mcp_eveng.capture_relay.config import CaptureSSHSettings
-from mcp_eveng.capture_relay.server import _stream_capture, create_relay_app
+from mcp_eveng.capture_relay.server import _dumpcap_command, _stream_capture, create_relay_app
 from mcp_eveng.capture_relay.tokens import issue_token
 
 SECRET = "test-secret-do-not-use-in-prod"
@@ -210,3 +210,15 @@ def test_token_for_wrong_secret_is_rejected() -> None:
     response = client.get(f"/capture/stream?token={token}")
 
     assert response.status_code == 403
+
+
+def test_dumpcap_command_is_prefixed_with_sudo() -> None:
+    # Regression test: confirmed live that without sudo, docker exec
+    # can't reach the daemon socket -- same underlying issue as
+    # docker_ps.DOCKER_PS_COMMAND, matches the sudoers rule
+    # docs/capture-relay.md sets up.
+    command = _dumpcap_command("Capture-2101248")
+
+    assert command.startswith("sudo docker exec ")
+    assert "Capture-2101248" in command
+    assert command.endswith("dumpcap -i eth0 -w -")

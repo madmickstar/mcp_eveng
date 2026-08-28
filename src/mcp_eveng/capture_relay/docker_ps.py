@@ -7,7 +7,7 @@ split on whitespace). Since this project constructs the SSH command
 itself rather than parsing whatever a human happened to run, it asks
 docker for a machine-parseable format instead:
 
-    docker ps --filter ancestor=eve-wireshark \\
+    sudo docker ps --filter ancestor=eve-wireshark \\
         --format '{{.ID}}\\t{{.Names}}\\t{{.CreatedAt}}\\t{{.Status}}'
 
 Filtered by `ancestor=eve-wireshark` (the image every capture container
@@ -15,6 +15,15 @@ runs, confirmed live) rather than by name prefix -- the `Capture-nnnnnnn`
 naming convention is PID-like and specific to what's been observed, not
 documented as a stable EVE-NG contract, whereas the image name is what
 actually identifies "this is a capture container."
+
+`sudo` is required -- confirmed live: without it, `docker ps` can't
+reach the daemon socket and exits non-zero, even though the SSH account
+itself authenticates fine. This matches the sudoers rule
+`docs/capture-relay.md` sets up (`mcp-eveng ALL=(root) NOPASSWD: ...`),
+which is written for `sudo docker ...`, not bare `docker ...` -- this
+project's design deliberately uses scoped sudo rather than `docker`
+group membership (broader, unscoped daemon access) for this account.
+
 
 Fields are tab-separated (`\\t` can't appear within any of the field
 values docker produces here), so parsing is a plain split -- no need to
@@ -26,7 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 DOCKER_PS_FORMAT = "{{.ID}}\t{{.Names}}\t{{.CreatedAt}}\t{{.Status}}"
-DOCKER_PS_COMMAND = f"docker ps --filter ancestor=eve-wireshark --format '{DOCKER_PS_FORMAT}'"
+DOCKER_PS_COMMAND = f"sudo docker ps --filter ancestor=eve-wireshark --format '{DOCKER_PS_FORMAT}'"
 
 
 @dataclass(frozen=True)

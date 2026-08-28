@@ -1,5 +1,5 @@
 """Standalone HTTP relay: verifies a `get_capture` token, then streams
-`docker exec <container> dumpcap -i eth0 -w -`'s output over SSH back to
+`sudo docker exec <container> dumpcap -i eth0 -w -`'s output over SSH back to
 the requesting client (the `.bat` companion's curl call) as a live,
 unbounded HTTP response body.
 
@@ -61,8 +61,13 @@ def _dumpcap_command(container: str) -> str:
     container names are restricted to a safe character set in
     practice, but this is a command string headed over SSH, so it
     isn't skipped just because the input is expected to already be safe.
+
+    `sudo` is required -- confirmed live (same issue as
+    `docker_ps.DOCKER_PS_COMMAND`): without it, `docker exec` can't
+    reach the daemon socket. Matches the sudoers rule
+    `docs/capture-relay.md` sets up for this account.
     """
-    return f"docker exec {shlex.quote(container)} dumpcap -i eth0 -w -"
+    return f"sudo docker exec {shlex.quote(container)} dumpcap -i eth0 -w -"
 
 
 async def _stream_capture(

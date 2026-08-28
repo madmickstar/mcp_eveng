@@ -78,3 +78,14 @@ def test_windows_style_line_endings_are_handled() -> None:
 
     assert len(result) == 1
     assert result[0].status == "Up 3 minutes"
+
+
+def test_docker_ps_command_is_prefixed_with_sudo() -> None:
+    # Regression test: confirmed live that without sudo, docker ps can't
+    # reach the daemon socket and exits non-zero, even though the SSH
+    # account itself authenticates fine -- matches the sudoers rule
+    # docs/capture-relay.md sets up, which is written for `sudo docker
+    # ...`, not bare `docker ...`.
+    from mcp_eveng.capture_relay.docker_ps import DOCKER_PS_COMMAND
+
+    assert DOCKER_PS_COMMAND.startswith("sudo docker ps ")

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Neither `docker_ps.DOCKER_PS_COMMAND` nor `server._dumpcap_command`
+  actually prefixed the command with `sudo`, despite the sudoers rules
+  this same project sets up in `docs/capture-relay.md` being written
+  for exactly that (`mcp-eveng ALL=(root) NOPASSWD: /usr/bin/docker
+  ps ..., /usr/bin/docker exec ...`).** Confirmed live: without `sudo`,
+  `docker ps` can't reach the daemon socket and exits non-zero, even
+  though the SSH account itself authenticates fine -- this project's
+  design deliberately uses scoped sudo rather than `docker` group
+  membership (broader, unscoped daemon access) for this account, so
+  the commands sent over SSH need to actually say `sudo`. Both
+  `list_captures` (via `DOCKER_PS_COMMAND`) and the relay's streaming
+  (via `_dumpcap_command`) were affected identically. Fixed by
+  prefixing both with `sudo`; 2 new regression tests confirm the
+  prefix directly rather than relying on it being implied by
+  surrounding assertions. Full suite re-run afterwards with zero
+  regressions.
 - **`ProtectHome=true` in both systemd units (`mcp-eveng.service` in
   `docs/install-linux.md`, `mcp-relay.service` in
   `docs/capture-relay.md`) makes `/home` completely invisible to the
