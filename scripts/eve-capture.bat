@@ -7,14 +7,15 @@ REM
 REM ** UNTESTED end-to-end on a real Windows machine as of writing --
 REM ** confirmed live so far: (1) the & query separator broke parsing
 REM ** under cmd.exe, (2) even after switching to ;, the argument still
-REM ** came through truncated right after the first field name (exact
-REM ** mechanism unconfirmed -- somewhere between the browser's handling
-REM ** of a non-standard scheme and Windows' URL dispatch). This version
-REM ** drops the query string entirely in favour of plain /-separated
-REM ** path segments, which have no special meaning to cmd.exe, curl, or
-REM ** (as far as this project can determine without further live
-REM ** testing) whatever layer was truncating the query-string version.
-REM ** Not yet confirmed live itself.
+REM ** came through truncated. Both fixed by dropping the query string
+REM ** entirely for plain /-separated path segments (see below) --
+REM ** confirmed live that THIS version parses correctly all the way
+REM ** through to reaching curl. Not yet confirmed: an actual successful
+REM ** stream all the way through to Wireshark (the one live test run so
+REM ** far hit a relay connection timeout, a separate infrastructure
+REM ** issue -- see docs/capture-relay.md -- not a script bug), and the
+REM ** plink fallback / Community-mode paths haven't been exercised live
+REM ** at all yet.
 REM
 REM Two link shapes, distinguished by the FIRST path segment, not a
 REM query field -- EVE-NG has no "mode" concept of its own; that was
@@ -97,27 +98,42 @@ if %ERRORLEVEL%==0 set "HAVECURL=1"
 
 set "CURLOK=0"
 if "%HAVECURL%"=="1" (
-    REM Preflight: verify the relay actually accepts this token BEFORE
-    REM committing to the real (indefinite) stream. This is deliberately
-    REM a separate request -- %ERRORLEVEL% after a `curl | wireshark`
-    REM pipe reflects WIRESHARK's exit code, not curl's (cmd.exe has no
-    REM equivalent to a shell's pipefail/PIPESTATUS to see an earlier
-    REM pipeline stage's own exit code), so a curl failure piped
-    REM straight into Wireshark could go unnoticed if Wireshark itself
-    REM still exits 0 after being closed normally with nothing to show.
-    REM --max-time cuts this preflight off after 3 seconds regardless of
-    REM outcome, since a successful stream never completes on its own;
-    REM --fail makes a non-2xx response (bad/expired token, relay
-    REM reachable but rejecting) fail fast with a distinct exit code
-    REM instead. curl exit code 28 (operation timeout) is therefore the
-    REM SUCCESS signal here -- it means headers were received and
-    REM streaming had already started when the preflight's own clock
-    REM ran out, not that the connection failed.
-    curl.exe -s -S --fail --max-time 3 -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
-    set "PREFLIGHT=!ERRORLEVEL!"
-    if "!PREFLIGHT!"=="0" set "CURLOK=1"
-    if "!PREFLIGHT!"=="28" set "CURLOK=1"
-    if "!CURLOK!"=="0" echo curl preflight failed ^(exit code !PREFLIGHT!^) -- falling back to plink.
+    REM Preflight: verify the relay actually returns a 200 for this
+    REM token BEFORE committing to the real (indefinite) stream. This is
+    REM deliberately a separate request -- %ERRORLEVEL% after a
+    REM `curl | wireshark` pipe reflects WIRESHARK's exit code, not
+    REM curl's (cmd.exe has no equivalent to a shell's pipefail/
+    REM PIPESTATUS to see an earlier pipeline stage's exit code), so a
+    REM curl failure piped straight into Wireshark could go unnoticed if
+    REM Wireshark itself still exits 0 after being closed normally with
+    REM nothing to show.
+    REM
+    REM Confirmed live: curl's own exit code alone can't tell "genuinely
+    REM couldn't connect" apart from "connected fine, was streaming,
+    REM got cut off by our own --max-time before the indefinite body
+    REM ever finishes" -- BOTH produce exit code 28 ("Operation
+    REM timeout"), including the literal message "Connection timed out"
+    REM for a real connection failure, which an earlier version of this
+    REM script wrongly treated as success. Checking the actual response
+    REM headers instead of inferring from the exit code sidesteps this
+    REM entirely: --connect-timeout bounds just the TCP handshake
+    REM (should be near-instant on a LAN -- a real failure to connect
+    REM shows up here, fast, with no headers ever captured);
+    REM --max-time bounds the OVERALL request, so it still cuts the
+    REM (indefinite, on success) body off after a few seconds regardless
+    REM of outcome; -D dumps whatever headers WERE received (if any) to
+    REM a temp file, checked below with findstr for an actual "200"
+    REM status line -- present only if the relay genuinely accepted the
+    REM token and started responding, regardless of which timeout
+    REM curl's own exit code reflects.
+    set "HDRFILE=%TEMP%\eve_capture_preflight_%RANDOM%.tmp"
+    curl.exe -s -S --connect-timeout 3 --max-time 5 -D "!HDRFILE!" -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
+    if exist "!HDRFILE!" (
+        findstr /C:" 200 " "!HDRFILE!" >nul 2>nul
+        if !ERRORLEVEL!==0 set "CURLOK=1"
+        del "!HDRFILE!" >nul 2>nul
+    )
+    if "!CURLOK!"=="0" echo curl preflight did not get a 200 response from the relay -- falling back to plink.
 )
 
 if "%CURLOK%"=="1" (

@@ -5,19 +5,25 @@ Streams an EVE-NG PRO capture (started from the GUI's right-click
 analyst needing their own personal SSH+sudo account on the EVE-NG host.
 
 **Status: `list_captures`/`get_capture` confirmed working live (v0.3.8).
-The `.bat` companion is in active live testing** -- two real bugs found
-so far, both from special characters in the `capture://` URL colliding
-with `cmd.exe`'s own parsing (`&` as a command separator, then an
-apparent truncation issue even after switching to `;`) -- see the
-`### Fixed` entries in `CHANGELOG.md`. Rather than keep chasing one
-character at a time, the URL format now avoids the whole class of
-problem: no query string at all, just plain `/`-separated path
-segments, none of which can ever contain a `/` themselves. Test suite
-covers the token scheme, `docker ps` parsing, URL building (including
-the path-pattern detection and the new segment format), and the
-relay's HTTP/streaming logic directly. What's still unverified: the
-`.bat`'s curl-relay path and its plink fallback haven't been confirmed
-working end-to-end yet (only the URL-parsing layer has been tested
+The `.bat` companion's URL parsing is confirmed working live too, after
+two real bugs found along the way** -- both from special characters in
+the `capture://` URL colliding with `cmd.exe`'s own parsing (`&` as a
+command separator, then an apparent truncation issue even after
+switching to `;`) -- see the `### Fixed` entries in `CHANGELOG.md`.
+Rather than keep chasing one character at a time, the URL format now
+avoids the whole class of problem: no query string at all, just plain
+`/`-separated path segments, none of which can ever contain a `/`
+themselves -- confirmed live that this version parses correctly all the
+way through to reaching curl. Test suite covers the token scheme,
+`docker ps` parsing, URL building (including the path-pattern
+detection and the segment format), and the relay's HTTP/streaming
+logic directly. What's still unverified: an actual successful stream
+reaching Wireshark end-to-end (the one live test so far hit a relay
+connection timeout -- see "Known limitations" below, a deployment/
+infrastructure question, not a script bug, though it did surface a
+real bug in how the script *interpreted* that timeout, now fixed too),
+the plink fallback, and Community mode -- none of the three have been
+exercised live yet.
 live so far, and the new segment format hasn't been tested live at
 all yet), and the Community-mode command block is still a
 reconstruction from a prose description, not copied from a real
@@ -425,12 +431,23 @@ exit code, not curl's, since `cmd.exe` has no equivalent to a shell's
 code. Without a preflight, a curl failure (bad token, relay
 unreachable) piped straight into Wireshark could go unnoticed if
 Wireshark itself still exits `0` after being closed normally with
-nothing to show. curl exit code `28` (operation timeout, from
-`--max-time`) is treated as *success* in the preflight specifically --
-it means the connection was accepted and streaming had already started
-when the preflight's own short timeout ran out, not that it failed;
-`--fail` makes an actual HTTP error (e.g. a rejected token) fail fast
-with a different code instead.
+nothing to show.
+
+**The preflight checks the actual response headers, not curl's exit
+code.** Confirmed live: curl's exit code alone can't distinguish
+"genuinely couldn't connect" from "connected fine, was streaming, got
+cut off by our own `--max-time` before the indefinite body ever
+finishes" -- both produce exit code `28` ("Operation timeout"),
+including the literal message `Connection timed out` for a real
+connection failure, which an earlier version of this script wrongly
+treated as success (launching Wireshark with nothing to actually
+show). `--connect-timeout` bounds just the TCP handshake separately
+from `--max-time` (which still bounds the overall request, cutting the
+indefinite body off after a few seconds regardless of outcome); `-D`
+dumps whatever headers were actually received to a temp file, checked
+afterward with `findstr` for a `200` status line -- present only if
+the relay genuinely accepted the token and started responding,
+regardless of which timeout curl's own exit code happens to reflect.
 
 **Edit the top of the script before deploying it:**
 
@@ -490,3 +507,15 @@ to install it.
 - **`docker` path in sudoers is hardcoded to `/usr/bin/docker`** --
   confirm this matches your EVE-NG host before relying on the sudoers
   rules above.
+- **If the `.bat`'s curl preflight reports `Connection timed out` (or
+  falls back to plink without an obvious reason), check three things
+  in order** before assuming it's a script bug: (1) is
+  `mcp-relay.service` actually running (`systemctl status
+  mcp-relay.service` on whatever machine it's deployed on)? (2) do
+  `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` in the main process's `.env`
+  actually match `CAPTURE_RELAY_LISTEN_HOST`/`_PORT` in the relay's own,
+  separate `.env` -- these are two different settings in two different
+  files (see step 4) and a mismatch here means `get_capture` is handing
+  out a URL that points somewhere the relay isn't actually listening;
+  (3) is there a firewall (on the relay's host, or on the Windows
+  client's own network) blocking that port between the two machines?

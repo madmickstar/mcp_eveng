@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The `.bat`'s curl preflight could treat a genuine connection
+  failure as success.** Confirmed live: `curl: (28) Connection timed
+  out` (the relay wasn't reachable at all) was indistinguishable, by
+  exit code alone, from "connected fine, was streaming, got cut off by
+  our own `--max-time` before the indefinite body ever finishes" --
+  both produce curl exit code `28`. The previous preflight design
+  (introduced to fix the separate curl-exit-code-through-a-pipe issue)
+  treated any `28` as success, so a real connection failure launched
+  Wireshark anyway with nothing to actually show. Fixed by checking the
+  *actual response headers* instead of inferring from the exit code:
+  `--connect-timeout` now bounds just the TCP handshake, separately
+  from the overall `--max-time`; headers (if any were received at all)
+  are dumped to a temp file and checked afterward with `findstr` for a
+  genuine `200` status line, which is present only if the relay
+  actually accepted the token and started responding, regardless of
+  which timeout curl's own exit code happens to reflect. Also updated
+  the `.bat`'s and `docs/capture-relay.md`'s status notes to reflect
+  what this same live test actually confirmed working: the new
+  path-segment URL format parses correctly all the way through to
+  reaching curl (the previous two bugs are resolved) -- the streaming
+  path itself, the plink fallback, and Community mode remain
+  unexercised live. Added a troubleshooting entry to "Known
+  limitations" for relay-unreachable symptoms (service not running,
+  advertised vs. listen address mismatch between the two separate
+  `.env` files, firewall) as a first checklist before assuming a script
+  bug, since that's what this specific live test turned out to be.
 - **A second, distinct `capture://` URL parsing bug found live even
   after switching the query separator from `&` to `;` -- the argument
   came through truncated right after the first field name (`?token`,

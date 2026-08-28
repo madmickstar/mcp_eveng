@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-eveng"
-version = "0.3.10"
+version = "0.3.11"
 description = "Model Context Protocol (MCP) server for automating EVENG network emulator labs"
 readme = "README.md"
 license = { text = "MIT" }
