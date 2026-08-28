@@ -5,6 +5,13 @@ Windows. See the [main README](../README.md) for what this project does,
 the full tool list, configuration variables, and the delete-confirmation
 flow — this doc only covers OS-specific setup.
 
+## Contents
+
+- [Install](#install)
+- [Running](#running)
+- [Using it with Claude Desktop / Claude Code (stdio)](#using-it-with-claude-desktop--claude-code-stdio)
+- [Using it with Claude Desktop / Claude Code (streamable-http)](#using-it-with-claude-desktop--claude-code-streamable-http)
+
 ## Install
 
 ```powershell

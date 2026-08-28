@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Consolidated capture-relay from a dedicated `mcp-relay`/`capture_relay`
+  account+group back to reusing the same `mcp-eveng` account the main
+  process already runs as, per direct feedback that the multi-account
+  design was still overcomplicating setup.** `docs/capture-relay.md`
+  now explicitly names two different *roles* that name covers -- the
+  account systemd uses to run `mcp-eveng.service`/`mcp-relay.service`
+  locally (no shell/home directory required, since systemd execs the
+  process directly and never invokes a shell) vs. the account being
+  SSH'd into on the EVE-NG host (which does need a real shell and a
+  home directory, since `sshd` invokes the shell to run a command) --
+  these can be the literal same Unix account if colocated, or two
+  different accounts sharing a name if not, but either way the
+  distinction needed to be spelled out since conflating the two is an
+  easy way to get confused about which one's requirements apply where.
+  Sudoers rule simplified from a group-based rule to a direct
+  username-based one, since there's only the one account now.
+  Corrected a resulting bug in the docs: the systemd unit's
+  `ExecStart` for the relay must run the `mcp-eveng-capture-relay`
+  console script, not `mcp-eveng --http` -- both scripts get installed
+  into any venv the package is installed into regardless of which one
+  you meant to run there, so this is an easy mix-up, and running the
+  wrong one starts a second copy of the main tool server instead of
+  the actual relay. Clarified the `pip install` pattern for a venv
+  belonging to a different (or unprivileged) account: `sudo -u
+  <account> /path/to/venv/bin/pip install ...` directly, rather than
+  `source .venv/bin/activate` -- activation doesn't reliably carry
+  through `sudo -u`. Also clarified there is only ONE source checkout
+  regardless of how many venvs/deployments run from it -- every `pip
+  install` (for either process) points at the same source path, just
+  into different venvs, and `[capture-relay]` needs installing into
+  BOTH separately since venvs share nothing with each other.
+- **`CAPTURE_SSH_HOST` now defaults to `${EVENG_HOST}`** in
+  `.env.example`, via `pydantic-settings`' variable-interpolation
+  support (confirmed working directly against the real file, not just
+  assumed) -- the docker host this SSHes to reach and the EVE-NG REST
+  API host are the same server in the overwhelming majority of setups,
+  so asking for a second, easily-out-of-sync IP was redundant. Still
+  overridable for the rare case where they genuinely differ.
+  `.env.capture-relay.example` has no `EVENG_HOST` of its own to
+  interpolate from (documented as such), so it keeps an explicit value
+  there.
+- **Added a Table of Contents to `docs/install-linux.md`,
+  `docs/install-windows.md`, and `docs/capture-relay.md`.**
+- **Added blank lines between every individual variable in both
+  `.env` example files** (previously only between section headers),
+  for easier scanning/editing.
 - **The `mcp-relay` service account's shell was set to
   `/usr/sbin/nologin`, which blocks SSH from executing ANY command
   through that account -- not just interactive sessions.** Confirmed
