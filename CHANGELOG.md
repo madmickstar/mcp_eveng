@@ -8,6 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A second, distinct `capture://` URL parsing bug found live even
+  after switching the query separator from `&` to `;` -- the argument
+  came through truncated right after the first field name (`?token`,
+  nothing after it, not even `=`).** Exact mechanism unconfirmed --
+  somewhere between the browser's handling of a non-standard scheme
+  and Windows' own URL dispatch, outside what this project can
+  directly instrument or verify without a live Windows/browser
+  environment. Rather than find one more special character to work
+  around, redesigned the URL format entirely: no query string at all,
+  just plain `/`-separated path segments --
+  `capture://<relay-host>/<container>/<token>/<relay-port>/<eveng-host>`.
+  Every field is guaranteed free of `/` itself (container names are
+  docker-safe, `token` is base64url -- no `/` in that alphabet,
+  `eveng_host` is an IP/hostname, `relay_port` is numeric), so there's
+  no separator ambiguity left for any layer to mishandle. `url.py`'s
+  `build_pro_capture_url`/`parse_pro_capture_url` rewritten
+  accordingly; `is_community_style_path` unchanged in spirit (still
+  checks the first path segment against `vunl*`/`pnet*`) but now
+  operates on one segment among several rather than the whole query-less
+  path. 17 tests in `test_url.py` rewritten/added, including one
+  asserting the URL contains none of `?`, `&`, `;`, or `=` at all.
+  The relay's own HTTP endpoint contract (`GET /capture/stream?token=`)
+  is unaffected -- that's a separate HTTP request curl constructs
+  directly, was never at risk from this issue (only one query field, so
+  `&` never came up there), and needed no changes.
+- **Fixed the curl-exit-code-through-a-pipe issue flagged (and
+  deliberately deferred) during a prior code review.** `%ERRORLEVEL%`
+  after `curl | wireshark` reflects Wireshark's own exit code, not
+  curl's -- `cmd.exe` has no equivalent to a shell's
+  `pipefail`/`PIPESTATUS` for seeing an earlier pipeline stage's exit
+  code. Without addressing this, a curl failure (bad token, relay
+  unreachable) piped straight into Wireshark could go unnoticed if
+  Wireshark itself still exits `0` after being closed normally with
+  nothing to show. Fixed with a short, separate preflight request
+  before committing to the real (indefinite) stream: `--max-time 3`
+  cuts it off regardless of outcome (a successful stream never
+  completes on its own), `--fail` makes an actual HTTP error (rejected
+  token) fail fast with a distinct code, and curl's own exit code `28`
+  (operation timeout) is treated as the *success* signal specifically,
+  since it means headers were received and streaming had already
+  started when the preflight's short clock ran out. Restructured this
+  section of the `.bat` to use flag variables rather than
+  `goto`/labels inside a parenthesized `if` block -- a well-known
+  `cmd.exe` fragility trap (jumping into or out of a block that's
+  already been tokenized as one unit can behave unpredictably) that an
+  earlier draft of this same fix had introduced.
 - **`list_captures`/`get_capture` confirmed working live.** The earlier
   `docker ps`/`docker exec` sudo and `ProtectHome` fixes, plus the
   restored group-based sudoers, are all confirmed live rather than

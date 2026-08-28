@@ -5,18 +5,23 @@ Streams an EVE-NG PRO capture (started from the GUI's right-click
 analyst needing their own personal SSH+sudo account on the EVE-NG host.
 
 **Status: `list_captures`/`get_capture` confirmed working live (v0.3.8).
-The `.bat` companion is in active live testing** -- one real bug found
-and fixed so far (the `&` query separator broke under `cmd.exe`, and
-`mode=` detection has been replaced with path-pattern detection
-entirely; see the `### Fixed` entries in `CHANGELOG.md`). 73 tests
-across `capture_relay/` and `tools/capture.py` cover the token scheme,
-`docker ps` parsing, URL building (including the path-pattern
-detection and `;` separator), and the relay's HTTP/streaming logic
-directly. What's still unverified: the `.bat`'s curl-relay path and
-its plink fallback haven't been confirmed working end-to-end yet (only
-the mode-detection/parsing layer has been tested live so far), and the
-Community-mode command block is still a reconstruction from a prose
-description, not copied from a real working file.
+The `.bat` companion is in active live testing** -- two real bugs found
+so far, both from special characters in the `capture://` URL colliding
+with `cmd.exe`'s own parsing (`&` as a command separator, then an
+apparent truncation issue even after switching to `;`) -- see the
+`### Fixed` entries in `CHANGELOG.md`. Rather than keep chasing one
+character at a time, the URL format now avoids the whole class of
+problem: no query string at all, just plain `/`-separated path
+segments, none of which can ever contain a `/` themselves. Test suite
+covers the token scheme, `docker ps` parsing, URL building (including
+the path-pattern detection and the new segment format), and the
+relay's HTTP/streaming logic directly. What's still unverified: the
+`.bat`'s curl-relay path and its plink fallback haven't been confirmed
+working end-to-end yet (only the URL-parsing layer has been tested
+live so far, and the new segment format hasn't been tested live at
+all yet), and the Community-mode command block is still a
+reconstruction from a prose description, not copied from a real
+working file.
 
 Community needs none of this -- its own GUI already generates working
 `capture://` links with no MCP involvement at all.
@@ -377,27 +382,55 @@ get_capture=enabled
 ## 7. The `.bat` companion and Windows registration
 
 `scripts/eve-capture.bat` -- distinguishes Community's own links from
-this project's by **path pattern**, not a query field (confirmed live:
-Community's device names always start `vunl` or `pnet`; this project's
-own container names never do, and EVE-NG has no "mode" concept of its
-own -- an earlier version of this script relied on an invented
-`mode=pro` query field instead, which turned out to be an unnecessary
-point of failure -- see the note on query separators below). A
-`vunl*`/`pnet*` path skips everything below entirely and runs
-Community's existing, unmodified flow. Anything else tries curl
-against the relay first (no SSH credentials needed on the client at
-all), falling back to plink straight into `eveng_host` only if curl or
-the relay is unreachable (using the user's own already-configured SSH
-access via the sudoers-scoped group from your *original* setup -- no
-password ever appears in the URL either way).
+this project's by the **first path segment**, not a query field
+(confirmed live: Community's device names always start `vunl` or
+`pnet`; this project's own container names never do, and EVE-NG has no
+"mode" concept of its own -- an earlier version of this script relied
+on an invented `mode=pro` query field instead, which turned out to be
+an unnecessary point of failure). A `vunl*`/`pnet*` first segment
+skips everything below entirely and runs Community's existing,
+unmodified flow. Anything else tries curl against the relay first (no
+SSH credentials needed on the client at all), falling back to plink
+straight into `eveng_host` only if curl or the relay is unreachable
+(using the user's own already-configured SSH access via the
+sudoers-scoped group from your *original* setup -- no password ever
+appears in the URL either way).
 
-**Query fields are separated by `;`, not `&`.** Confirmed live: `&`
-broke parsing here -- `cmd.exe` (always the interpreter for a `.bat`
-file, however it's invoked) treats an unescaped `&` in a command line
-as a command separator. Community's own links never hit this, since
-they never carry a query string at all; this project's own
-multi-field query string was the first `capture://` link ever built
-with `&` in it, and broke exactly where you'd expect.
+**No query string at all -- plain `/`-separated path segments
+instead.** Confirmed live, twice: first `&` (a command separator in
+`cmd.exe`, always the interpreter for a `.bat` file however it's
+invoked) broke parsing outright; after switching the separator to `;`,
+the argument still came through truncated right after the first field
+name (exact mechanism unconfirmed -- somewhere between the browser's
+handling of a non-standard scheme and Windows' own URL dispatch,
+outside what this project can directly instrument). Rather than find
+one more special character to work around, the URL format now avoids
+the whole class of problem: `capture://<relay-host>/<container>/
+<token>/<relay-port>/<eveng-host>` -- no `?`, `=`, `&`, or `;`
+anywhere. Every one of those fields is guaranteed free of `/` itself
+(container names are docker-safe, `token` is base64url -- no `/` in
+that alphabet, `eveng_host` is an IP/hostname, `relay_port` is
+numeric), so there's no remaining ambiguity about where one field ends
+and the next begins. The curl request the `.bat` makes *to the relay*
+still uses ordinary `?token=...` query syntax (a single field, so `&`
+never comes up) -- that's a separate HTTP request curl constructs
+directly, not something passed through `cmd.exe`'s own command-line
+parsing the same way the `capture://` URL itself is.
+
+**The curl step also runs a short preflight before committing to the
+real (indefinite) stream**, rather than checking `%ERRORLEVEL%` after
+piping straight into Wireshark -- that would reflect Wireshark's own
+exit code, not curl's, since `cmd.exe` has no equivalent to a shell's
+`pipefail`/`PIPESTATUS` for seeing an earlier pipeline stage's exit
+code. Without a preflight, a curl failure (bad token, relay
+unreachable) piped straight into Wireshark could go unnoticed if
+Wireshark itself still exits `0` after being closed normally with
+nothing to show. curl exit code `28` (operation timeout, from
+`--max-time`) is treated as *success* in the preflight specifically --
+it means the connection was accepted and streaming had already started
+when the preflight's own short timeout ran out, not that it failed;
+`--fail` makes an actual HTTP error (e.g. a rejected token) fail fast
+with a different code instead.
 
 **Edit the top of the script before deploying it:**
 

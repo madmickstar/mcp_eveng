@@ -193,8 +193,8 @@ async def test_get_capture_by_position_mints_token_and_url() -> None:
 
     assert result["status"] == "success"
     assert result["data"]["container"] == "Capture-2101248"  # position 1 = oldest
-    assert result["data"]["capture_url"].startswith("capture://172.16.130.14/Capture-2101248?")
-    assert "mode=" not in result["data"]["capture_url"]
+    assert result["data"]["capture_url"].startswith("capture://172.16.130.14/Capture-2101248/")
+    assert "?" not in result["data"]["capture_url"]
 
 
 async def test_get_capture_by_exact_container_name() -> None:

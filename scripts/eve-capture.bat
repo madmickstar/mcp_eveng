@@ -5,28 +5,27 @@ REM (same Windows registry mechanism Community's own capture:// links
 REM already use). Windows passes the full URL as %1.
 REM
 REM ** UNTESTED end-to-end on a real Windows machine as of writing --
-REM ** confirmed live so far: the & query separator (see below) broke
-REM ** parsing under cmd.exe; not yet confirmed whether the rest of this
-REM ** script (curl/relay path, plink fallback, community path) works.
+REM ** confirmed live so far: (1) the & query separator broke parsing
+REM ** under cmd.exe, (2) even after switching to ;, the argument still
+REM ** came through truncated right after the first field name (exact
+REM ** mechanism unconfirmed -- somewhere between the browser's handling
+REM ** of a non-standard scheme and Windows' URL dispatch). This version
+REM ** drops the query string entirely in favour of plain /-separated
+REM ** path segments, which have no special meaning to cmd.exe, curl, or
+REM ** (as far as this project can determine without further live
+REM ** testing) whatever layer was truncating the query-string version.
+REM ** Not yet confirmed live itself.
 REM
-REM Two link shapes, distinguished by PATH PATTERN, not a query field --
-REM EVE-NG has no "mode" concept of its own; that was this project's own
-REM invention and turned out to be an unnecessary point of failure
-REM (see the note on & below). Community's own device-name shapes,
-REM confirmed live, are the actual signal:
+REM Two link shapes, distinguished by the FIRST path segment, not a
+REM query field -- EVE-NG has no "mode" concept of its own; that was
+REM this project's own invention and turned out to be an unnecessary
+REM point of failure. Community's own device-name shapes, confirmed
+REM live, are the actual signal:
 REM   Community (unmodified, existing behaviour):
-REM     capture://<eveng-host>/vunl<N>_<node>_<if>   (no query string)
-REM     capture://<eveng-host>/pnet<N>                (no query string)
-REM   This project's relay path (anything else in the path position):
-REM     capture://<relay-host>/<container>?token=...;relay_port=...;eveng_host=...
-REM
-REM Query fields are separated by ";", NOT "&" -- confirmed live that &
-REM broke parsing here. cmd.exe (always the interpreter for a .bat file,
-REM however it's invoked) treats an unescaped & as a command separator;
-REM Community's own links never hit this since they never had a query
-REM string at all, but this project's multi-field query string was the
-REM first capture:// link ever to include one. ; isn't one of cmd.exe's
-REM special characters (& | < > ^ ( ) % !).
+REM     capture://<eveng-host>/vunl<N>_<node>_<if>   (one path segment)
+REM     capture://<eveng-host>/pnet<N>                (one path segment)
+REM   This project's relay path (anything else in the first segment):
+REM     capture://<relay-host>/<container>/<token>/<relay-port>/<eveng-host>
 REM
 REM CONFIGURE THESE FOR YOUR ENVIRONMENT:
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
@@ -42,46 +41,39 @@ set "FULLURL=%~1"
 REM Strip the capture:// scheme.
 set "REST=%FULLURL:capture://=%"
 
-REM Split on "?" -- HOSTPATH is always present; QUERY is only present
-REM for this project's own relay-path links.
-set "HOSTPATH="
-set "QUERY="
-for /f "tokens=1,* delims=?" %%A in ("%REST%") do (
-    set "HOSTPATH=%%A"
-    set "QUERY=%%B"
-)
-
-REM HOSTPATH is <host>/<path> -- host up to the first slash, everything
-REM after is the device name (Community) or container name (this project).
+REM Split into host and everything-after-the-host on the first "/".
 set "URLHOST="
 set "URLPATH="
-for /f "tokens=1,* delims=/" %%A in ("%HOSTPATH%") do (
+for /f "tokens=1,* delims=/" %%A in ("%REST%") do (
     set "URLHOST=%%A"
     set "URLPATH=%%B"
 )
 
-REM Detect Community's own device-name shapes by their first 4
-REM characters -- "vunl" and "pnet" are both exactly 4 characters, so a
-REM plain substring compare (case-insensitive via /I) is enough; no
-REM regex needed.
+REM URLPATH is now either:
+REM   - one segment (Community: the device name itself), or
+REM   - four segments, /-separated (this project: container/token/
+REM     relay_port/eveng_host)
+REM Detect Community's own device-name shapes by the FIRST segment's
+REM first 4 characters -- "vunl" and "pnet" are both exactly 4
+REM characters, so a plain substring compare (case-insensitive via /I)
+REM is enough; no regex needed. This works whether URLPATH has 1 segment
+REM or 4, since it only ever looks at the very first one.
 set "PATHPREFIX=%URLPATH:~0,4%"
 if /I "%PATHPREFIX%"=="vunl" goto :community_mode
 if /I "%PATHPREFIX%"=="pnet" goto :community_mode
 
 REM ---------------------------------------------------------------------
-REM This project's relay path: parse token/relay_port/eveng_host out of
-REM the query string (split on ";", each piece split on "=").
+REM This project's relay path: split URLPATH on "/" into its 4 segments.
 REM ---------------------------------------------------------------------
+set "CONTAINER="
 set "TOKEN="
 set "RELAYPORT="
 set "EVENGHOST="
-
-for %%Q in ("%QUERY:;=" "%") do (
-    for /f "tokens=1,* delims==" %%K in (%%Q) do (
-        if /I "%%K"=="token" set "TOKEN=%%L"
-        if /I "%%K"=="relay_port" set "RELAYPORT=%%L"
-        if /I "%%K"=="eveng_host" set "EVENGHOST=%%L"
-    )
+for /f "tokens=1,2,3,4 delims=/" %%A in ("%URLPATH%") do (
+    set "CONTAINER=%%A"
+    set "TOKEN=%%B"
+    set "RELAYPORT=%%C"
+    set "EVENGHOST=%%D"
 )
 
 if "%TOKEN%"=="" (
@@ -91,24 +83,54 @@ if "%TOKEN%"=="" (
     exit /b 1
 )
 
-set "CONTAINER=%URLPATH%"
 set "RELAYHOST=%URLHOST%"
 
 REM --- Primary path: curl against the relay (no SSH creds needed) ---
+REM
+REM Deliberately NOT using goto/labels inside a parenthesized if-block
+REM here (a well-known cmd.exe fragility trap -- jumping into or out of
+REM a block that's already been tokenized as one unit can behave
+REM unpredictably) -- flag variables and straight-line if-blocks instead.
+set "HAVECURL=0"
 where curl.exe >nul 2>nul
-if %ERRORLEVEL%==0 (
+if %ERRORLEVEL%==0 set "HAVECURL=1"
+
+set "CURLOK=0"
+if "%HAVECURL%"=="1" (
+    REM Preflight: verify the relay actually accepts this token BEFORE
+    REM committing to the real (indefinite) stream. This is deliberately
+    REM a separate request -- %ERRORLEVEL% after a `curl | wireshark`
+    REM pipe reflects WIRESHARK's exit code, not curl's (cmd.exe has no
+    REM equivalent to a shell's pipefail/PIPESTATUS to see an earlier
+    REM pipeline stage's own exit code), so a curl failure piped
+    REM straight into Wireshark could go unnoticed if Wireshark itself
+    REM still exits 0 after being closed normally with nothing to show.
+    REM --max-time cuts this preflight off after 3 seconds regardless of
+    REM outcome, since a successful stream never completes on its own;
+    REM --fail makes a non-2xx response (bad/expired token, relay
+    REM reachable but rejecting) fail fast with a distinct exit code
+    REM instead. curl exit code 28 (operation timeout) is therefore the
+    REM SUCCESS signal here -- it means headers were received and
+    REM streaming had already started when the preflight's own clock
+    REM ran out, not that the connection failed.
+    curl.exe -s -S --fail --max-time 3 -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
+    set "PREFLIGHT=!ERRORLEVEL!"
+    if "!PREFLIGHT!"=="0" set "CURLOK=1"
+    if "!PREFLIGHT!"=="28" set "CURLOK=1"
+    if "!CURLOK!"=="0" echo curl preflight failed ^(exit code !PREFLIGHT!^) -- falling back to plink.
+)
+
+if "%CURLOK%"=="1" (
     curl.exe -s -N "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%" | "%WIRESHARK%" -k -i -
-    if !ERRORLEVEL!==0 (
-        exit /b 0
-    )
-    echo curl/relay path failed -- falling back to plink.
+    exit /b 0
 )
 
 REM --- Fallback path: plink straight into the EVE-NG host, requires the
 REM     user's own SSH access (via the sudoers-scoped group) -- no
 REM     password is ever passed on the command line; plink prompts
 REM     interactively or uses a saved Pageant/session, same as the
-REM     original fully-manual flow this replaces. ---
+REM     original fully-manual flow this replaces. Reached whenever curl
+REM     wasn't available or its preflight didn't succeed. ---
 if not exist "%PLINK%" (
     echo Neither curl nor plink is available -- cannot stream this capture.
     pause
