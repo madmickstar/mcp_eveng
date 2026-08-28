@@ -106,10 +106,11 @@ way to get confused:
    real shell) is completely fine here, and a home directory isn't
    required either (though see the private-key note in step 2 below).
 2. **The account those processes SSH *into*, on the EVE-NG host, to run
-   `docker ps`/`docker exec`.** This one goes through `sshd`, which
-   *does* invoke the account's shell to execute the command --
-   `nologin` here breaks everything (see the fix below), and it needs a
-   real home directory for `authorized_keys` to live in.
+   `docker ps`/`docker exec`/`tcpdump` (see step 3).** This one goes
+   through `sshd`, which *does* invoke the account's shell to execute
+   the command -- `nologin` here breaks everything (see the fix
+   below), and it needs a real home directory for `authorized_keys`
+   to live in.
 
 If everything's on one machine, these could be the literal same Unix
 account. If the EVE-NG host is a separate machine from wherever
@@ -132,11 +133,11 @@ sudo useradd --system --create-home --shell /bin/bash --groups capture_relay mcp
 
 **The `capture_relay` group is what sudo access is actually granted
 to (step 3 below), not the `mcp-eveng` username directly** -- so
-adding another account that needs the same `docker ps`/`docker exec`
-rights later (a second EVE-NG-side account, a human analyst's own
-account, whatever) is just adding it to this group, not editing
-sudoers again. `mcp-eveng` is simply the first (and so far only)
-member.
+adding another account that needs the same `docker ps`/`docker exec`/
+`tcpdump` rights later (a second EVE-NG-side account, a human
+analyst's own account, whatever) is just adding it to this group, not
+editing sudoers again. `mcp-eveng` is simply the first (and so far
+only) member.
 
 **A real shell (`/bin/bash`), not `/usr/sbin/nologin`.** `nologin`
 doesn't just block interactive sessions -- it refuses to execute *any*
@@ -224,25 +225,47 @@ line per key -- multiple keys can coexist there).
 
 ## 3. Scope sudo rights to exactly what's needed
 
-`/etc/sudoers.d/mcp-eveng-capture-relay` (edit with `visudo -f` to get
-syntax validation):
+`/etc/sudoers.d/capture_relay` (edit with `visudo -f` to get syntax
+validation):
 
 ```
-%capture_relay ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *, /usr/bin/docker exec * dumpcap -i eth0 -w -
+# Allow EVE-NG PRO commands
+%capture_relay  ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *
+%capture_relay  ALL=(root) NOPASSWD: /usr/bin/docker exec * dumpcap -i eth0 -w -
+
+# Allow EVE-NG Community commands
+%capture_relay  ALL=(root) NOPASSWD: /usr/bin/tcpdump -U -i * -s 0 -w -*
 ```
 
-One rule, both commands, granted to the **`%capture_relay` group**
-(the `%` prefix is sudoers' own syntax for "this is a group, not a
-username") -- any current or future member of that group can run
-either, without another sudoers edit. `mcp-eveng` gets these rights by
-being a member (step 1), not by being named here directly.
+Granted to the **`%capture_relay` group** (the `%` prefix is sudoers'
+own syntax for "this is a group, not a username") -- any current or
+future member of that group can run any of these, without another
+sudoers edit. `mcp-eveng` gets these rights by being a member (step 1),
+not by being named here directly.
 
-Confirm the exact path to `docker` on your EVE-NG host first (`which
-docker`) -- sudoers command matching is exact-path, not `$PATH`-aware.
-The `*` wildcards are broader than ideal (sudoers doesn't support
-matching "any container name" more precisely without a wrapper script),
-but this is still restricted to exactly these two specific docker
-subcommand shapes, not arbitrary docker access.
+The Community rule is needed even though `mcp-eveng`'s primary purpose
+is the PRO/relay path -- the same account also runs the `.bat`'s
+Community-mode `tcpdump` command via plink when a link turns out to be
+one of Community's own (see step 7). Unlike a real Community
+deployment's own SSH account (which is commonly root, needing no
+`sudo` at all for this), this one is deliberately non-root, so `sudo`
+is required here.
+
+**Note the trailing `*` after `-w -` on the tcpdump rule specifically**
+-- sudoers matches a command exactly unless its own spec ends in a
+wildcard, and the Community `.bat` command conditionally appends
+`not port 22` after `-w -` for one specific interface (`pnet0`). The
+two PRO rules don't need this: `docker exec ... dumpcap -i eth0 -w -`
+never has anything appended after it in this project's own design, so
+matching it exactly (no trailing `*`) is intentional, not an oversight.
+
+Confirm the exact path to `docker`/`tcpdump` on your EVE-NG host first
+(`which docker`, `which tcpdump`) -- sudoers command matching is
+exact-path, not `$PATH`-aware. The `*` wildcards elsewhere are broader
+than ideal (sudoers doesn't support matching "any container name" or
+"any interface name" more precisely without a wrapper script), but
+each rule is still restricted to exactly one specific command shape,
+not arbitrary `docker`/`tcpdump` access.
 
 ## 4. Configure two SEPARATE `.env` files
 

@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The Community-mode `tcpdump` command was missing `sudo`, per direct
+  feedback: the real original Community `.bat` this was copied from
+  authenticates as root (no `sudo` needed for raw-capture privileges),
+  but this deployment's `mcp-eveng` account is deliberately non-root,
+  authenticating via the `capture_relay` group instead -- `sudo` is
+  required here even though it wasn't in the source this was copied
+  from.** Added `sudo` back to both the primary and password-based
+  Community `tcpdump` invocations in `scripts/eve-capture.bat`. Also
+  incorporated a third sudoers rule (confirmed from the user's own
+  deployed `/etc/sudoers.d/capture_relay`) into `docs/capture-relay.md`
+  step 3 for this command -- `%capture_relay ALL=(root) NOPASSWD:
+  /usr/bin/tcpdump -U -i * -s 0 -w -*` -- with a trailing `*` after
+  `-w -` specifically, per a sharp catch: sudoers matches a command
+  exactly unless its own spec ends in a wildcard, and the Community
+  `.bat` conditionally appends `not port 22` after `-w -` for the
+  `pnet0` interface case, which the two PRO sudoers rules never do (so
+  correctly have no trailing `*`, not an oversight). Split the sudoers
+  example into three separate, commented rules matching the real
+  deployed file's own structure, rather than one dense comma-joined
+  line.
 - **The `.bat`'s plink invocations never actually pointed at a private
   key -- `plink` has no equivalent to `ssh`'s automatic key discovery,
   and this project's own key-based auth setup (`docs/capture-relay.md`

@@ -190,26 +190,33 @@ exit /b %ERRORLEVEL%
 
 :community_mode
 REM ---------------------------------------------------------------------
-REM Community mode: existing, unmodified behaviour -- this block is
-REM copied from a real, working Community .bat, not reconstructed.
-REM URLHOST is the EVE-NG host; URLPATH is the vunl-/pnet-style device
-REM name. Confirmed detail from that real script: no sudo (Community's
-REM SSH account apparently doesn't need it for this, unlike this
-REM project's own dedicated relay-fallback account above); `-U`
-REM (unbuffered output -- important for a live stream, not a completed
-REM capture) and `-s 0` (snaplen 0, capture the full packet, no
-REM truncation) on tcpdump; and a `not port 22` filter specifically
-REM when the interface is exactly "pnet0" -- presumably to exclude the
-REM SSH session's own traffic from a capture on an interface that
-REM happens to carry it too, avoiding a feedback loop.
+REM Community mode: tcpdump/flags/filter logic copied from a real,
+REM working Community .bat, not reconstructed. URLHOST is the EVE-NG
+REM host; URLPATH is the vunl-/pnet-style device name. `-U` (unbuffered
+REM output -- important for a live stream, not a completed capture) and
+REM `-s 0` (snaplen 0, capture the full packet, no truncation) on
+REM tcpdump; a `not port 22` filter specifically when the interface is
+REM exactly "pnet0" -- presumably to exclude the SSH session's own
+REM traffic from a capture on an interface that happens to carry it
+REM too, avoiding a feedback loop.
+REM
+REM One deliberate difference from that real original: it authenticated
+REM as root (so no sudo needed for tcpdump's raw-capture privileges);
+REM this deployment authenticates as a non-root account via the
+REM capture_relay group instead (step 1/3), so sudo IS required here.
+REM Matches the sudoers rule from step 3:
+REM     %capture_relay ALL=(root) NOPASSWD: /usr/bin/tcpdump -U -i * -s 0 -w -*
+REM (note the trailing * after "-w -" -- needed because of %FILTER%
+REM below: sudoers matches a command exactly unless its own spec ends in
+REM a wildcard, and the pnet0 case appends " not port 22" after "-w -".)
 REM ---------------------------------------------------------------------
 set "FILTER="
 if "%URLPATH%"=="pnet0" set "FILTER= not port 22"
 
-"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
+"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 REM Password-based alternative -- uncomment this line and comment out
 REM the one above if you'd rather authenticate this way instead:
-REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
+REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 if %ERRORLEVEL% neq 0 (
     echo Community capture path failed.
     pause
