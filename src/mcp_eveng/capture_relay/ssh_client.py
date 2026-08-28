@@ -18,14 +18,16 @@ on a real test install.) `is_available()` below lets callers check
 first and give a clear, actionable error instead of a raw
 `ModuleNotFoundError` surfacing from inside an MCP tool call.
 
-**Not unit-tested beyond `_connect_kwargs`.** Actually opening an SSH
-connection requires a live SSH server, which this project's test
-environment doesn't have. `_connect_kwargs` is factored out separately
-so at least that part is directly testable; `run_command` and
-`streaming_process` are thin enough to be correct by inspection,
-matching this project's own convention for I/O-boundary code (see
-`client.py`'s `_get`/`_put`) -- but they're genuinely unverified against
-a real target and should be exercised live before relying on them.
+**Unit-tested beyond `_connect_kwargs` too now, via mocking
+`asyncssh.connect`/`create_process` directly** -- confirmed live that
+"thin enough to be correct by inspection" was wrong at least once: this
+module shipped without `encoding=None` on `create_process`, and
+asyncssh's default UTF-8 text mode broke the moment real (binary)
+`dumpcap` output reached it. `run_command`'s actual round-trip over a
+real SSH connection is still untested (needs a live server this
+project's test environment doesn't have), but the *shape* of both
+calls -- which arguments actually reach `asyncssh`, which was exactly
+where the bug was -- is now covered without needing one.
 """
 
 from __future__ import annotations
@@ -88,9 +90,19 @@ async def streaming_process(settings: CaptureSSHSettings, command: str) -> Async
     connected). Both the process and the underlying SSH connection are
     torn down on exit, including on an exception -- the caller doesn't
     need to manage that separately.
+
+    `encoding=None` is required here, not optional -- confirmed live:
+    `asyncssh.create_process()` defaults to text mode (UTF-8-decoding
+    every byte of channel data) unless told otherwise, but `dumpcap`'s
+    output (`-w -`) is raw binary pcap/pcapng, not text at all. Without
+    this, asyncssh raised `ProtocolError: 'utf-8' codec can't decode
+    byte ... invalid continuation byte` on the very first non-UTF-8 byte
+    of real capture data. `run_command` (used only for `docker ps`,
+    genuinely textual output) is correctly left in the default text mode
+    -- this fix is specific to the binary streaming path.
     """
     import asyncssh
 
     async with asyncssh.connect(**_connect_kwargs(settings)) as conn:
-        async with conn.create_process(command) as process:
+        async with conn.create_process(command, encoding=None) as process:
             yield process

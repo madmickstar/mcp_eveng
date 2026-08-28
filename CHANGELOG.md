@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The relay crashed with `asyncssh.misc.ProtocolError: 'utf-8' codec
+  can't decode byte ... invalid continuation byte` the moment a real
+  capture actually reached it.** Confirmed live, with a full stack
+  trace: `asyncssh.create_process()` defaults to UTF-8 text mode
+  (verified directly against the installed library's own docstring,
+  not assumed) unless told otherwise, but `dumpcap`'s output (`-w -`)
+  is raw binary pcap/pcapng, not text at all -- asyncssh tried to
+  decode the first non-UTF-8 byte of genuine capture data and failed
+  immediately. Fixed with `encoding=None` on `create_process` in
+  `streaming_process` (`ssh_client.py`) -- asyncssh's own documented
+  way to request raw bytes. `run_command` (used only for `docker ps`,
+  genuinely textual output) was correctly left in text mode; this fix
+  is specific to the binary streaming path. This is exactly the kind
+  of bug `ssh_client.py`'s own "thin enough to be correct by
+  inspection, but genuinely unverified" caveat was hedging against --
+  and it was wrong at least this once. Added 2 new tests mocking
+  `asyncssh.connect`/`create_process` directly to assert the actual
+  arguments reaching asyncssh (`encoding=None` present,
+  `_connect_kwargs` passed through correctly) -- this class of bug
+  (wrong arguments passed to the SSH library) turns out to be testable
+  without a live server after all, even though the SSH round-trip
+  itself still isn't; updated `ssh_client.py`'s and this doc's status
+  notes accordingly rather than leaving the old blanket "not
+  unit-tested" claim in place now that it's no longer fully accurate.
 - **The `.bat`'s curl preflight could treat a genuine connection
   failure as success.** Confirmed live: `curl: (28) Connection timed
   out` (the relay wasn't reachable at all) was indistinguishable, by

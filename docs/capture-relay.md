@@ -5,19 +5,24 @@ Streams an EVE-NG PRO capture (started from the GUI's right-click
 analyst needing their own personal SSH+sudo account on the EVE-NG host.
 
 **Status: `list_captures`/`get_capture` confirmed working live (v0.3.8).
-The `.bat` companion's URL parsing is confirmed working live too, after
-two real bugs found along the way** -- both from special characters in
-the `capture://` URL colliding with `cmd.exe`'s own parsing (`&` as a
-command separator, then an apparent truncation issue even after
-switching to `;`) -- see the `### Fixed` entries in `CHANGELOG.md`.
-Rather than keep chasing one character at a time, the URL format now
-avoids the whole class of problem: no query string at all, just plain
-`/`-separated path segments, none of which can ever contain a `/`
-themselves -- confirmed live that this version parses correctly all the
-way through to reaching curl. Test suite covers the token scheme,
-`docker ps` parsing, URL building (including the path-pattern
-detection and the segment format), and the relay's HTTP/streaming
-logic directly. What's still unverified: an actual successful stream
+The `.bat`/relay pipeline is close -- URL parsing, the relay reaching
+the EVE-NG host over SSH, and the relay actually running `dumpcap` are
+all confirmed live now.** Bugs found and fixed along the way: two in
+the `.bat`'s URL parsing (special characters in the `capture://` URL
+colliding with `cmd.exe`'s own parsing -- resolved by dropping the
+query string entirely for plain `/`-separated path segments), and one
+in the relay itself -- `asyncssh` defaulted to UTF-8 text mode and
+broke on real (binary) `dumpcap` output with a `ProtocolError` the
+moment actual capture data arrived; fixed with `encoding=None`,
+confirmed against `asyncssh`'s own documented API rather than assumed,
+and now covered by a mocked regression test. See the `### Fixed`
+entries in `CHANGELOG.md` for all three. Test suite covers the token
+scheme, `docker ps` parsing, URL building, the relay's HTTP/streaming
+logic, and (newly) the exact arguments `streaming_process` passes to
+`asyncssh`. What's still unverified: a capture actually reaching
+Wireshark and rendering correctly end-to-end (the encoding fix should
+resolve this, but hasn't been confirmed live yet), the plink fallback,
+and Community mode -- none of the three have been exercised live yet.
 reaching Wireshark end-to-end (the one live test so far hit a relay
 connection timeout -- see "Known limitations" below, a deployment/
 infrastructure question, not a script bug, though it did surface a
