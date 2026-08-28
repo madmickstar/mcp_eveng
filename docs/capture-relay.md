@@ -371,6 +371,17 @@ ExecStart=/opt/mcp_relay/.venv/bin/mcp-eveng-capture-relay
 Restart=on-failure
 RestartSec=5
 
+# Safety net on top of uvicorn's own timeout_graceful_shutdown (5s, set
+# in __main__.py) -- that's what actually cancels any still-running
+# capture stream cleanly (letting the SSH-channel-close chain that
+# terminates the remote dumpcap process run), but if it somehow doesn't
+# complete in time, this bounds how long `systemctl stop` waits before
+# escalating to SIGKILL, rather than systemd's own default of 90s. Kept
+# comfortably longer than uvicorn's 5s, not equal to it, so uvicorn's own
+# graceful path is what normally handles this, with SIGKILL only as a
+# last resort.
+TimeoutStopSec=20
+
 StandardOutput=journal
 StandardError=journal
 

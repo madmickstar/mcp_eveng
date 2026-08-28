@@ -54,6 +54,24 @@ def fake_open_stream(chunks: list[bytes], delay: float = 0.0):
     return _open
 
 
+class _TrackedOpenStream:
+    """Like fake_open_stream, but records whether the context manager's
+    cleanup actually ran -- used to confirm cancellation propagates
+    through it correctly (see test_stream_capture_cleans_up_on_task_cancellation)."""
+
+    def __init__(self, chunks: list[bytes], delay: float = 0.0) -> None:
+        self.chunks = chunks
+        self.delay = delay
+        self.exited = False
+
+    @asynccontextmanager
+    async def __call__(self, settings, command):
+        try:
+            yield FakeProcess(self.chunks, self.delay)
+        finally:
+            self.exited = True
+
+
 class FakeRequest:
     """Controls is_disconnected() via a sequence of return values,
     consumed in order; once exhausted, always reports connected."""
@@ -144,6 +162,37 @@ async def test_stream_capture_yields_data_that_arrives_within_timeout() -> None:
     ]
 
     assert chunks == [b"fast-chunk"]
+
+
+async def test_stream_capture_cleans_up_on_task_cancellation() -> None:
+    """Regression test for a real, confirmed gap: without an explicit
+    `timeout_graceful_shutdown`, uvicorn's own default (`None`) means
+    `systemctl stop` on the relay would hang indefinitely (a capture
+    stream never finishes on its own) until systemd's own much longer
+    default `TimeoutStopSec` gives up and SIGKILLs the whole process --
+    bypassing this cleanup entirely and orphaning the remote `dumpcap`
+    process on the EVE-NG host. Confirms OUR side of that fix: that
+    cancelling the task actually iterating this generator does run
+    `open_stream`'s cleanup, per Python's normal
+    cancellation-through-`async with` semantics. The other half --
+    something actually calling `.cancel()` in time -- is uvicorn's own
+    `timeout_graceful_shutdown`, set explicitly in `__main__.py`.
+    """
+    tracked = _TrackedOpenStream([b"chunk-1"], delay=10.0)  # never arrives on its own
+    request = FakeRequest([])
+
+    async def consume() -> None:
+        async for _ in _stream_capture(ssh_settings(), "Capture-x", request, tracked):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.sleep(0.05)  # let it start and reach the (slow) read
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert tracked.exited is True
 
 
 # -- create_relay_app: HTTP routing + token layer, via TestClient -------------

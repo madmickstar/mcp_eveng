@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Stopping the relay (`systemctl stop mcp-relay.service`) while a
+  capture was streaming would hang, then eventually SIGKILL the whole
+  process, orphaning the remote `dumpcap` process on the EVE-NG host --
+  confirmed against uvicorn's own source, not assumed.** uvicorn's
+  `timeout_graceful_shutdown` defaults to `None`, and `asyncio.wait_for(
+  ..., timeout=None)` waits forever -- the code path that cancels
+  remaining in-flight requests is never reached at all. Since a capture
+  stream is designed to never finish on its own (that's the whole
+  point), `systemctl stop` would hang until systemd's own, much longer
+  default `TimeoutStopSec` (90s) gave up and SIGKILLed the process --
+  bypassing Python's own cleanup entirely (the `async with` chain in
+  `streaming_process` that closes the SSH channel, which is what
+  actually terminates the remote process; also confirmed directly
+  against `asyncssh`'s own source: closing the process context manager
+  closes the channel, which is exactly what's needed). Fixed by setting
+  `timeout_graceful_shutdown=5` explicitly in `__main__.py`'s
+  `uvicorn.run()` call, so uvicorn cancels any still-running stream
+  itself after 5 seconds -- Python's normal task-cancellation-through-
+  `async with` semantics then run that same cleanup chain correctly.
+  Added `TimeoutStopSec=20` to the relay's systemd unit in
+  `docs/capture-relay.md` as a safety net on top of that (comfortably
+  longer than the 5s, so uvicorn's own graceful path is what normally
+  handles this, with SIGKILL only as a last resort if that somehow
+  doesn't complete in time). 2 new tests: one confirming
+  `_stream_capture`'s cleanup genuinely runs when its task is cancelled
+  (using a tracked fake context manager, not just asserted by
+  inspection), one confirming `main()` actually passes
+  `timeout_graceful_shutdown` through to `uvicorn.run` and not just
+  present somewhere in the file.
 - **The Community-mode `tcpdump` command was missing `sudo`, per direct
   feedback: the real original Community `.bat` this was copied from
   authenticates as root (no `sudo` needed for raw-capture privileges),
