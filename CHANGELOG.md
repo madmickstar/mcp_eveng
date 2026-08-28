@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Restored group-based sudoers on the EVE-NG host, per direct
+  feedback that this got lost in an earlier consolidation.** The
+  v0.3.3-v0.3.5 sequence collapsed a two-account design down to a
+  single `mcp-eveng` account for simplicity, but along the way also
+  flattened the EVE-NG-host sudoers rule from group-based
+  (`%capture_relay`) to username-based (`mcp-eveng` directly) --
+  losing the ability to add another account to the same rights later
+  without editing sudoers again, which was the specific reason for a
+  group in the first place. Restored: `docs/capture-relay.md` step 1
+  now creates both the `mcp-eveng` account AND a `capture_relay` group
+  (with `mcp-eveng` as its first member), and step 3's sudoers rule
+  targets `%capture_relay`, not `mcp-eveng`. This is scoped narrowly to
+  the EVE-NG-host side (role 2 in the doc's own terminology) -- the
+  *local* accounts running `mcp-eveng.service`/`mcp-relay.service`
+  (role 1) are unaffected and still both simply `mcp-eveng`/`mcp-eveng`,
+  per the same direct feedback that this part is exactly what was
+  wanted.
 - **Neither `docker_ps.DOCKER_PS_COMMAND` nor `server._dumpcap_command`
   actually prefixed the command with `sudo`, despite the sudoers rules
   this same project sets up in `docs/capture-relay.md` being written

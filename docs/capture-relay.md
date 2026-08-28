@@ -95,11 +95,26 @@ account. If the EVE-NG host is a separate machine from wherever
 doc assumes), they're two *different* accounts that happen to share a
 name for consistency -- with different requirements each, per above.
 
+Role 2's actual sudo rights (step 3) are granted to a dedicated group
+(`capture_relay`), not to the `mcp-eveng` username directly -- so
+adding another account with the same rights later (a second machine's
+account, a human's own account, whatever) only needs adding it to
+that group, not another sudoers edit.
+
 ## 1. The account on the EVE-NG host (SSH target) -- role 2 above
 
 ```bash
-sudo useradd --system --create-home --shell /bin/bash mcp-eveng
+sudo groupadd capture_relay
+sudo useradd --system --create-home --shell /bin/bash --groups capture_relay mcp-eveng
 ```
+
+**The `capture_relay` group is what sudo access is actually granted
+to (step 3 below), not the `mcp-eveng` username directly** -- so
+adding another account that needs the same `docker ps`/`docker exec`
+rights later (a second EVE-NG-side account, a human analyst's own
+account, whatever) is just adding it to this group, not editing
+sudoers again. `mcp-eveng` is simply the first (and so far only)
+member.
 
 **A real shell (`/bin/bash`), not `/usr/sbin/nologin`.** `nologin`
 doesn't just block interactive sessions -- it refuses to execute *any*
@@ -191,11 +206,14 @@ line per key -- multiple keys can coexist there).
 syntax validation):
 
 ```
-mcp-eveng ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *, /usr/bin/docker exec * dumpcap -i eth0 -w -
+%capture_relay ALL=(root) NOPASSWD: /usr/bin/docker ps --filter ancestor\=eve-wireshark --format *, /usr/bin/docker exec * dumpcap -i eth0 -w -
 ```
 
-One rule, both commands, for the `mcp-eveng` account on the EVE-NG
-host (role 2 above).
+One rule, both commands, granted to the **`%capture_relay` group**
+(the `%` prefix is sudoers' own syntax for "this is a group, not a
+username") -- any current or future member of that group can run
+either, without another sudoers edit. `mcp-eveng` gets these rights by
+being a member (step 1), not by being named here directly.
 
 Confirm the exact path to `docker` on your EVE-NG host first (`which
 docker`) -- sudoers command matching is exact-path, not `$PATH`-aware.
