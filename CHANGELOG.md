@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`ProtectHome=true` in both systemd units (`mcp-eveng.service` in
+  `docs/install-linux.md`, `mcp-relay.service` in
+  `docs/capture-relay.md`) makes `/home` completely invisible to the
+  service -- not permission-checked, hidden entirely -- which directly
+  contradicted this same project's own advice to store the
+  capture-relay SSH private key under `/home/mcp-eveng/.ssh/`.**
+  Confirmed live: this produced a `[Errno 13] Permission denied`
+  reading the key that looked exactly like a file-ownership problem
+  (and was reported, reasonably, as one) but wasn't -- verified
+  correct ownership/permissions on the key file made no difference,
+  and duplicating it under a different filename in the same directory
+  reproduced the identical error, which only makes sense if the whole
+  directory tree is inaccessible to the service rather than one
+  specific file being denied. Changed to `ProtectHome=read-only` in
+  both units, which still blocks the service from writing anywhere
+  under `/home` but permits reads. Added a forward-reference from
+  `docs/capture-relay.md`'s keypair-generation step to this fix, since
+  reading the doc in order means generating the key before reaching
+  the systemd section that would otherwise silently break reading it.
 - **Consolidated capture-relay from a dedicated `mcp-relay`/`capture_relay`
   account+group back to reusing the same `mcp-eveng` account the main
   process already runs as, per direct feedback that the multi-account

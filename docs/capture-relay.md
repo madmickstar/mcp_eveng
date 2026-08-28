@@ -134,6 +134,14 @@ not by SSHing into the EVE-NG host and running `ssh-keygen` there --
 the private key needs to live wherever the connection originates
 *from*. Only the **public** half ever needs to reach the EVE-NG host.
 
+**If you store this key under `/home/mcp-eveng/...` (as the examples
+below do) and run either process under the systemd units in this doc
+or `install-linux.md`, make sure `ProtectHome=read-only`, not `true`,
+in both** -- `true` makes `/home` completely invisible to the service,
+which looks exactly like a permissions problem on the key file (a
+misleading `Permission denied`) but isn't one at all. See step 5's
+unit file below.
+
 Linux/macOS:
 
 ```bash
@@ -307,7 +315,14 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# read-only, not "true" -- "true" makes /home (including the SSH private
+# key from step 2 above, if stored under it) completely INVISIBLE to
+# this service regardless of file permissions, not just permission-
+# checked. Confirmed live: this was a real bug, producing a misleading
+# "Permission denied" that looked like a file-ownership problem but
+# wasn't. read-only still blocks this service from writing anywhere
+# under /home.
+ProtectHome=read-only
 ReadWritePaths=/opt/mcp_relay
 
 [Install]
