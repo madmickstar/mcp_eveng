@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`docs/capture-relay.md` had no instructions at all for running the
+  relay anywhere except via systemd, which is Linux-only** -- a real
+  gap surfaced by a genuine Windows test setup, not a hypothetical.
+  Confirmed live that `python -m mcp_eveng.capture_relay` (or the
+  installed `mcp-eveng-capture-relay` console script) works exactly
+  like running the main process interactively
+  (`python -m mcp_eveng --http`) -- nothing in `uvicorn`/`asyncssh`/
+  Starlette is Linux-specific, only the systemd deployment steps are.
+  Added a new "Running the relay for manual/interactive testing (any
+  OS, including Windows)" section to step 5, including the easy-to-miss
+  detail that the `.env` read is whichever one sits in the current
+  working directory at the moment the command is run -- same
+  convention the main process already uses -- so testing both
+  processes on the same machine means running each from its own
+  separate directory, not the same one.
 - **Community-mode captures could fail with Wireshark reporting `File
   type is neither a supported pcap nor pcapng format... magic =
   0x6b63696d`, even though the underlying capture was fine.** Decoded

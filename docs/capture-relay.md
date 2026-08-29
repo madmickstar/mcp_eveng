@@ -40,6 +40,7 @@ Community needs none of this -- its own GUI already generates working
 - [3. Scope sudo rights to exactly what's needed](#3-scope-sudo-rights-to-exactly-whats-needed)
 - [4. Configure two SEPARATE `.env` files](#4-configure-two-separate-env-files)
 - [5. Install and enable the relay as its own systemd service](#5-install-and-enable-the-relay-as-its-own-systemd-service)
+  - [Running the relay for manual/interactive testing](#running-the-relay-for-manualinteractive-testing-any-os-including-windows)
 - [6. Enable the tools on the main mcp-eveng process](#6-enable-the-tools-on-the-main-mcp-eveng-process)
 - [7. The `.bat` companion and Windows registration](#7-the-bat-companion-and-windows-registration)
 - [Known limitations](#known-limitations)
@@ -289,6 +290,12 @@ generate it twice.
 
 ## 5. Install and enable the relay as its own systemd service
 
+**This step is Linux-specific (systemd).** The relay itself runs fine
+on Windows too -- nothing in `uvicorn`/`asyncssh`/Starlette is
+Linux-specific -- if you're testing on Windows rather than deploying
+to production Linux infrastructure, skip straight to "Running the
+relay for manual/interactive testing" at the end of this step instead.
+
 **There is only ONE source checkout** (wherever you cloned this repo,
 e.g. `/opt/mcp_eveng`) -- the relay does NOT need its own separate copy
 of the code, just its own separate *venv* and *`.env`*, in whatever
@@ -402,6 +409,39 @@ sudo systemctl enable mcp-relay.service
 
 Independent of `mcp-eveng.service` entirely -- a crash or hang in the
 relay can't take the main MCP tool server down, and vice versa.
+
+### Running the relay for manual/interactive testing (any OS, including Windows)
+
+No systemd unit needed for this -- just run the relay directly, the
+same way you'd run the main `mcp-eveng` process interactively
+(`python -m mcp_eveng --http`):
+
+```
+python -m mcp_eveng.capture_relay
+```
+
+or, if the venv's `Scripts`/`bin` directory is on `PATH`, the installed
+console script directly:
+
+```
+mcp-eveng-capture-relay
+```
+
+**No `--http` flag, and none accepted** -- unlike the main process,
+this entrypoint takes no CLI flags at all; it reads
+`CAPTURE_RELAY_LISTEN_HOST`/`_PORT` from `.env` instead (see step 4).
+
+**The `.env` it reads is whichever one is in the current working
+directory when you run the command** -- same convention the main
+process already uses. If you're testing both processes on the same
+Windows machine, run each from its own separate directory (each with
+its own `.env`, per step 4) -- running both from the same directory
+means one of them is reading the wrong `.env`.
+
+This is fine for testing, but doesn't survive a reboot or restart on
+its own the way the systemd service above does -- it just runs in
+whatever terminal you started it in, same as the main process does
+when started the same way.
 
 ## 6. Enable the tools on the main mcp-eveng process
 
