@@ -5,37 +5,27 @@ Streams an EVE-NG PRO capture (started from the GUI's right-click
 analyst needing their own personal SSH+sudo account on the EVE-NG host.
 
 **Status: `list_captures`/`get_capture` confirmed working live (v0.3.8).
-A real capture has reached Wireshark successfully end-to-end at least
-once** -- URL parsing, the relay reaching the EVE-NG host over SSH, the
-relay running `dumpcap`, and streaming real capture data all confirmed
-live. Bugs found and fixed along the way: two in the `.bat`'s URL
-parsing (special characters in the `capture://` URL colliding with
-`cmd.exe`'s own parsing -- resolved by dropping the query string
-entirely for plain `/`-separated path segments), one in the relay
-itself (`asyncssh` defaulted to UTF-8 text mode and broke on real
-binary `dumpcap` output -- fixed with `encoding=None`), and the
-preflight's timeout window was too tight for a genuinely-working
-relay's real round-trip time (widened). See the `### Fixed` entries in
-`CHANGELOG.md` for details. Test suite covers the token scheme,
-`docker ps` parsing, URL building, the relay's HTTP/streaming logic,
-and the exact arguments `streaming_process` passes to `asyncssh`.
-What's still unverified: which code path (curl/relay vs. the plink
-fallback) actually delivered that first successful capture is still
-being confirmed -- plink's `-i` key flag was missing entirely until
-just now, so a fallback that "just worked" without it would be
-surprising; and Community mode's real, working command (now copied in
-directly, not reconstructed) hasn't been exercised through this
-wrapper script live yet.
-reaching Wireshark end-to-end (the one live test so far hit a relay
-connection timeout -- see "Known limitations" below, a deployment/
-infrastructure question, not a script bug, though it did surface a
-real bug in how the script *interpreted* that timeout, now fixed too),
-the plink fallback, and Community mode -- none of the three have been
-exercised live yet.
-live so far, and the new segment format hasn't been tested live at
-all yet), and the Community-mode command block is still a
-reconstruction from a prose description, not copied from a real
-working file.
+The curl/relay path has now delivered a real, confirmed-successful
+capture to Wireshark end-to-end (v0.3.14 test)** -- URL parsing, the
+relay reaching the EVE-NG host over SSH, the relay running `dumpcap`,
+and streaming real capture data all confirmed live, including a
+successful preflight with real bytes received before its own timeout
+cutoff (the expected, benign success case -- see the `### Fixed`
+entries for the earlier ambiguity this cleared up). Bugs found and
+fixed along the way: two in the `.bat`'s URL parsing, one in the relay
+itself (`asyncssh` UTF-8 text-mode default), one in the preflight's
+timeout window (too tight, widened), and most recently a missing
+`plink -i` key flag plus a missing `-batch` flag -- the latter
+confirmed live via a decoded Wireshark error (`magic = 0x6b63696d`
+decodes to the literal text `mick`, the tester's own Windows username,
+meaning an unconfirmed-host-key prompt was leaking into the piped
+stream instead of real capture data). See `CHANGELOG.md`'s `### Fixed`
+entries for full details on all of these. Test suite covers the token
+scheme, `docker ps` parsing, URL building, the relay's HTTP/streaming
+logic, and the exact arguments `streaming_process` passes to
+`asyncssh`. What's still unverified live: the plink fallback and
+Community mode end-to-end with the `-batch`/separate-credentials
+fixes just made.
 
 Community needs none of this -- its own GUI already generates working
 `capture://` links with no MCP involvement at all.
@@ -495,10 +485,18 @@ regardless of which timeout curl's own exit code happens to reflect.
 
 ```bat
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
-set PLINK=C:\Path\To\plink.exe
-set COMMUNITY_SSH_USER=eve-capture-user
-set COMMUNITY_SSH_KEY=C:\Path\To\private-key.ppk
+set PLINK=C:\Program Files\PuTTY\plink.exe
+set PRO_SSH_USER=eve-pro-user
+set PRO_SSH_KEY=%HOMEPATH%\.ssh\eve-pro.ppk
+set COMMUNITY_SSH_USER=eve-comm-user
+set COMMUNITY_SSH_KEY=%HOMEPATH%\.ssh\eve-comm.ppk
 ```
+
+Separate username/key pairs for the two plink paths -- don't assume
+they're the same account. `PRO_SSH_*` authenticates against this
+project's own dedicated relay-fallback account (step 1/3, `sudo docker
+exec ... dumpcap`); `COMMUNITY_SSH_*` is whatever account your existing,
+separate Community setup already uses.
 
 `plink` has no single flag for "use this key automatically" the way
 `ssh` does -- it needs an explicit `-i` pointing at a private key file
@@ -509,15 +507,37 @@ password-based alternative (`-pw`, matching the pattern of the
 original Community `.bat`) is included at each one if you'd rather use
 that instead -- uncomment one line, leave the other commented.
 
+**Every plink call uses `-batch`, deliberately.** Without it, plink
+prompts interactively for anything it can't resolve non-interactively
+-- most commonly an unconfirmed host key on a first-time connection
+(not suppressed by `-no-antispoof`, a different, unrelated flag) -- and
+since the whole command's stdout is piped straight into Wireshark
+expecting pure pcap/pcapng bytes, prompt text corrupts that stream
+instead of failing cleanly. Confirmed live: Wireshark's own error
+(`File type is neither a supported pcap nor pcapng format... magic =
+0x6b63696d`) decodes byte-for-byte to the literal ASCII text `mick` --
+the tester's own Windows username -- as the first four bytes actually
+received, consistent with exactly this kind of prompt/banner text
+leaking into the pipe rather than real capture data ever arriving.
+`-batch` makes plink fail outright instead of prompting, which is the
+correct behavior for a piped, scripted invocation regardless of the
+exact root cause. If this recurs even with `-batch`, run the same
+plink command directly (drop the final `| Wireshark.exe -k -i -` and
+redirect to a file instead) to see its raw output rather than guessing
+further.
+
 **The Community-mode command block is copied from a real, working
-Community `.bat`, not reconstructed** -- confirmed correct: no `sudo`
-(Community's SSH account apparently doesn't need it for this, unlike
-this project's own dedicated relay-fallback account), `-U`/`-s 0` on
-`tcpdump`, and a `not port 22` filter specifically when the interface
-is exactly `pnet0`. The PRO-fallback plink command (used when curl or
-the relay isn't reachable) still uses this project's own
-`sudo docker exec ... dumpcap` -- confirm that one still matches your
-actual sudoers setup from step 3.
+Community `.bat`, not reconstructed** -- confirmed correct: `-U`/`-s 0`
+on `tcpdump`, and a `not port 22` filter specifically when the
+interface is exactly `pnet0`. One deliberate difference from that real
+original: it authenticated as root (no `sudo` needed for `tcpdump`'s
+raw-capture privileges); this deployment authenticates as a non-root
+account via the `capture_relay` group instead (step 1/3), so `sudo` IS
+required here, unlike the original script it's otherwise copied from.
+The PRO-fallback plink command (used when curl or the relay isn't
+reachable) uses this project's own `sudo docker exec ... dumpcap` --
+confirm both sudo rules still match your actual sudoers setup from
+step 3.
 
 Windows registration (same mechanism your existing Community setup
 already uses -- if `capture://` is already registered, skip this):

@@ -34,8 +34,17 @@ REM     capture://<relay-host>/<container>/<token>/<relay-port>/<eveng-host>
 REM
 REM CONFIGURE THESE FOR YOUR ENVIRONMENT:
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
-set PLINK=C:\Path\To\plink.exe
-set COMMUNITY_SSH_USER=eve-capture-user
+set PLINK=C:\Program Files\PuTTY\plink.exe
+REM Separate username/key pairs for the two plink paths -- don't assume
+REM they're the same account, since they authenticate against
+REM genuinely different things: PRO_SSH_* is this project's own
+REM dedicated relay-fallback account (sudo docker exec ... dumpcap --
+REM see docs/capture-relay.md step 1/3); COMMUNITY_SSH_* is whatever
+REM account your existing, separate Community setup already uses.
+set PRO_SSH_USER=eve-pro-user
+set PRO_SSH_KEY=%HOMEPATH%\.ssh\eve-pro.ppk
+set COMMUNITY_SSH_USER=eve-comm-user
+set COMMUNITY_SSH_KEY=%HOMEPATH%\.ssh\eve-comm.ppk
 REM plink has no single flag that means "use this OpenSSH-format key
 REM automatically" the way ssh does -- it needs an explicit -i pointing
 REM at a private key file (PuTTY's own .ppk format; convert an
@@ -45,7 +54,6 @@ REM below; a commented-out password-based alternative (matching the
 REM original Community .bat's own approach) is included at each plink
 REM call if you'd rather use that instead -- uncomment ONE line, leave
 REM the other commented, don't run both.
-set COMMUNITY_SSH_KEY=C:\Path\To\private-key.ppk
 REM set PASSWORD=your-password-here
 REM
 REM Community's plink invocation below is copied from a real, working
@@ -169,19 +177,38 @@ if "%CURLOK%"=="1" (
 
 REM --- Fallback path: plink straight into the EVE-NG host, requires the
 REM     user's own SSH access (via the sudoers-scoped group) -- no
-REM     password is ever passed on the command line; plink prompts
-REM     interactively or uses a saved Pageant/session, same as the
-REM     original fully-manual flow this replaces. Reached whenever curl
-REM     wasn't available or its preflight didn't succeed. ---
+REM     password is ever passed on the command line by default (key-
+REM     based auth is the default below). Reached whenever curl wasn't
+REM     available or its preflight didn't succeed. ---
+REM
+REM -batch is deliberate, not optional: without it, plink prompts
+REM interactively for anything it can't resolve non-interactively (an
+REM unconfirmed host key on a first-time connection, most commonly --
+REM not suppressed by -no-antispoof, which is a different, unrelated
+REM flag) -- and since this whole command's stdout is piped straight
+REM into Wireshark expecting pure pcap/pcapng bytes, any such prompt
+REM text corrupts that stream instead of just failing cleanly. Confirmed
+REM live: Wireshark's own error ("File type is neither a supported pcap
+REM nor pcapng format... magic = 0x6b63696d") decodes byte-for-byte to
+REM the literal ASCII text "mick" -- the local Windows username -- as
+REM the first four bytes actually received, consistent with exactly
+REM this kind of prompt/banner text leaking into the pipe rather than
+REM real capture data ever arriving at all. -batch makes plink fail
+REM outright instead of prompting when it can't proceed non-
+REM interactively, which is the correct behavior for a piped, scripted
+REM invocation like this one regardless of the exact root cause. If
+REM this error recurs even with -batch, run the same plink command
+REM directly (drop the `| "%WIRESHARK%" -k -i -` and redirect to a file
+REM instead) to see its raw output directly rather than guessing further.
 if not exist "%PLINK%" (
     echo Neither curl nor plink is available -- cannot stream this capture.
     pause
     exit /b 1
 )
-"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
+"%PLINK%" -ssh -batch -i "%PRO_SSH_KEY%" %PRO_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
 REM Password-based alternative -- uncomment this line and comment out
 REM the one above if you'd rather authenticate this way instead:
-REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
+REM "%PLINK%" -ssh -batch -pw %PASSWORD% %PRO_SSH_USER%@%EVENGHOST% -no-antispoof "sudo docker exec %CONTAINER% dumpcap -i eth0 -w -" | "%WIRESHARK%" -k -i -
 if %ERRORLEVEL% neq 0 (
     echo plink/dumpcap path also failed.
     pause
@@ -213,10 +240,10 @@ REM ---------------------------------------------------------------------
 set "FILTER="
 if "%URLPATH%"=="pnet0" set "FILTER= not port 22"
 
-"%PLINK%" -ssh -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
+"%PLINK%" -ssh -batch -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 REM Password-based alternative -- uncomment this line and comment out
 REM the one above if you'd rather authenticate this way instead:
-REM "%PLINK%" -ssh -pw %PASSWORD% %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
+REM "%PLINK%" -ssh -batch -pw %PASSWORD% %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 if %ERRORLEVEL% neq 0 (
     echo Community capture path failed.
     pause

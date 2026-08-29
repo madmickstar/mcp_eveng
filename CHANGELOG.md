@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Community-mode captures could fail with Wireshark reporting `File
+  type is neither a supported pcap nor pcapng format... magic =
+  0x6b63696d`, even though the underlying capture was fine.** Decoded
+  live: those four bytes are the literal ASCII text `mick` -- the
+  tester's own Windows username -- meaning something was leaking
+  non-pcap text into the piped stream ahead of any real capture data.
+  Root cause: no plink call in the script used `-batch`, so plink was
+  free to prompt interactively for anything it couldn't resolve
+  non-interactively -- most likely an unconfirmed SSH host key on a
+  first-time connection (not suppressed by `-no-antispoof`, a
+  different, unrelated flag) -- and since the whole command's stdout is
+  piped straight into Wireshark expecting pure pcap/pcapng bytes,
+  prompt/banner text corrupts that stream instead of the command
+  failing cleanly. Added `-batch` to all four plink invocations (both
+  PRO-fallback and Community-mode, both the key-based default and the
+  commented-out password-based alternative) -- the correct behavior for
+  a piped, scripted invocation regardless of the exact root cause.
+  Also, per direct feedback: split the single shared
+  `COMMUNITY_SSH_USER`/`COMMUNITY_SSH_KEY` pair into separate
+  `PRO_SSH_USER`/`PRO_SSH_KEY` (this project's own dedicated
+  relay-fallback account) and `COMMUNITY_SSH_USER`/`COMMUNITY_SSH_KEY`
+  (whatever account the existing, separate Community setup uses) --
+  the script was silently assuming these were interchangeable, which
+  they aren't in general. Default `PLINK` path corrected to PuTTY's
+  actual default install location
+  (`C:\Program Files\PuTTY\plink.exe`, was a placeholder). Confirmed
+  (per direct feedback, no fix needed): the curl preflight's ~10s
+  discard window (see the widened-timeout fix above) is an accepted,
+  deliberate tradeoff, not a bug to chase further.
 - **Stopping the relay (`systemctl stop mcp-relay.service`) while a
   capture was streaming would hang, then eventually SIGKILL the whole
   process, orphaning the remote `dumpcap` process on the EVE-NG host --
