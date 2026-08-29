@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-08-30
+
+**Capture-relay feature branch (`feature/capture-relay`), merged to
+`master` after a full round of live testing -- every major path
+confirmed working end-to-end:** stopping the relay mid-stream
+(cleanly breaks the stream rather than hanging/orphaning the remote
+process), adding/deleting link-quality settings on both source and
+destination interfaces, curl-based streaming on PRO, plink-based
+streaming on PRO (the fallback path), and plink-based streaming on
+Community. Developed across many small, individually-tested commits
+(see the full history in `feature/capture-relay` if useful) rather
+than as one large, unverified change -- summarized below by area
+rather than repeating every individual commit message.
+
 ### Fixed
 - **`docs/capture-relay.md` had no instructions at all for running the
   relay anywhere except via systemd, which is Linux-only** -- a real
