@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.17] - 2026-08-30
 
 **Capture-relay feature branch (`feature/capture-relay`), merged to
-`master` after a full round of live testing -- every major path
+`main` after a full round of live testing -- every major path
 confirmed working end-to-end:** stopping the relay mid-stream
 (cleanly breaks the stream rather than hanging/orphaning the remote
 process), adding/deleting link-quality settings on both source and
