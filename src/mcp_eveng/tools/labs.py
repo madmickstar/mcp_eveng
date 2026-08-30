@@ -375,7 +375,7 @@ async def open_lab(client: EvengClient, name: str, search_path: str = "/", selec
     return {
         "status": "success",
         "message": f"Lab {lab_name!r} is {lock_label}.\n\n{_OPEN_LAB_MENU}",
-        "data": {"lab_path": lab_path, "lab_name": lab_name, "lock": locked, **data},
+        "data": {**data, "lab_path": lab_path, "lab_name": lab_name, "lock": locked},
     }
 
 

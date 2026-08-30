@@ -42,6 +42,7 @@ _VENDOR_ALIASES: dict[str, str] = {
     "TrendMicro": "Trend Micro",
     "Barracuda Networks": "Barracuda",
     "Barracuda": "Barracuda",
+    "Barraccuda": "Barracuda",  # EVE-NG's own catalog typo (confirmed live)
     "SonicWall": "SonicWall",
     "WatchGuard": "WatchGuard",
     "Sophos": "Sophos",

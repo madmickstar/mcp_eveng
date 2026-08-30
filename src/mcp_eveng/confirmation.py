@@ -54,8 +54,23 @@ def resolve_selection(
     first-seen order with duplicates removed; invalid_tokens is every
     token that didn't resolve to exactly one item (not found, or
     ambiguous).
+
+    The whole (stripped) `selection` is tried as a single exact match
+    first, before any token-splitting -- a name/path can itself contain
+    spaces (e.g. "Cisco Catalyst 8000v"), which the multi-select
+    tokenizing below would otherwise incorrectly break apart into
+    separate, individually-unmatchable words. Only falls through to
+    per-token splitting (for genuine multi-select, e.g. "R1, R2" or
+    "1 2 3") if the whole string doesn't match anything by itself.
     """
-    tokens = [t for t in re.split(r"[,\s]+", selection.strip()) if t]
+    stripped = selection.strip()
+
+    if stripped and not stripped.isdigit():
+        whole_matches = [c for c in candidates if matches_exact(c, stripped.lower())]
+        if len(whole_matches) == 1:
+            return [whole_matches[0]], []
+
+    tokens = [t for t in re.split(r"[,\s]+", stripped) if t]
     resolved: list[dict[str, Any]] = []
     invalid: list[str] = []
     for token in tokens:

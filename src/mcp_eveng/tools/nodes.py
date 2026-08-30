@@ -1864,7 +1864,8 @@ async def _loop_node_action(
             "message": (
                 f"{past_tense.capitalize()} {len(succeeded)}/{len(nodes)} node(s), looped "
                 "individually (not EVE-NG's bulk endpoint -- confirmed unreliable on this "
-                f"server). Failed: {'; '.join(failed)}."
+                f"server). Succeeded: {', '.join(succeeded) if succeeded else 'none'}. "
+                f"Failed: {'; '.join(failed)}."
             ),
         }
 

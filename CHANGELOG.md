@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-30
+
 ### Fixed
 - **GitHub Actions' CI "lint" job was failing outright** (`Ruff lint`
   step, discovered live via the actual CI run after merging to `main` --
@@ -57,8 +59,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   All three (`ruff check`, `ruff format --check`, `mypy src/`) now pass
   cleanly, confirmed by actually running each one, not just reasoning
   through the fixes. Full test suite re-run afterwards with zero
-  regressions (identical to the pre-existing baseline failure list),
-  confirming this large a cleanup pass changed no actual behavior.
+  regressions (identical to the pre-existing baseline failure list at
+  the time), confirming this large a cleanup pass changed no actual
+  behavior.
+- **All 7 previously-"established baseline" test failures were actually
+  genuine, fixable bugs -- confirmed live via a real GitHub Actions run
+  with full tracebacks, not just reasoned through.** This project's own
+  local verification had been comparing against these 7 as an
+  unexamined "known failure list" for the entire engagement without
+  ever diagnosing them individually; the real CI output made that no
+  longer defensible.
+  - `test_generic_api_error`: a test bug, not a client bug -- the test
+    never mocked the `/auth/login` call that `EvengClient`'s own
+    (correct, extensively documented) relogin-on-400 behavior triggers.
+    Fixed by mocking the full sequence (initial 400, login, retried
+    400) instead of assuming a single request.
+  - `test_extract_vendor_collapses_known_typo_alias`: EVE-NG's own
+    catalog typo `"Barraccuda"` was documented in `vendor.py`'s own
+    comments as a case this handles, but the actual alias entry was
+    missing from `_VENDOR_ALIASES` -- added.
+  - Three `test_open_lab_*` tests: `open_lab` computed `lock` as a
+    proper bool via `_is_locked()`, then immediately overwrote it with
+    the raw (int/string) value via `{"lock": locked, **data}` -- `data`
+    itself carries its own raw `lock` field, and a later key in a dict
+    literal always wins over an earlier one. Fixed by reordering to
+    `{**data, "lock": locked, ...}`.
+  - `test_add_lab_node_selection_by_exact_name_resolves_template`:
+    `resolve_selection` (shared by every search/select/confirm tool)
+    tokenizes on commas/whitespace for multi-select (e.g. "R1, R2"),
+    which incorrectly split a single space-containing exact name like
+    `"Cisco Catalyst 8000v"` into three separate, individually
+    unmatchable words. Fixed by trying the whole (stripped) selection
+    as one exact match first, falling through to the existing
+    token-splitting only if that doesn't match anything -- confirmed
+    via the full `test_confirmation.py`/`test_nodes.py`/`test_labs.py`/
+    `test_folders_networks_users.py` suite that genuine multi-select
+    (comma/whitespace-separated numbers or names) still works
+    identically.
+  - `test_eve_start_node_all_nodes_one_failure_does_not_block_others`:
+    the partial-failure branch of `_loop_node_action`'s message
+    reported a success *count* but never named which nodes actually
+    succeeded, unlike the all-succeeded branch, which did. Fixed for
+    consistency.
+  All fixes verified: full suite went from 7 failing to 565 passing,
+  `ruff check`/`ruff format --check`/`mypy src/` all still clean
+  afterwards. None of the 7 root causes touch anything Python-version-
+  specific (dict-literal duplicate-key ordering, plain `re.split`,
+  string formatting, missing test mocks, a missing dict entry) --
+  confirmed by direct reasoning through each mechanism, though only
+  actually re-run under Python 3.12 in this environment; the project's
+  own CI matrix (3.10-3.13) is the definitive cross-version check.
+
+### Added
+- **`get_link_quality`: new PRO/Corporate-only tool complementing
+  `set_link_quality`.** Gets the current delay/jitter/packet-loss/
+  bandwidth on both sides of an existing connection -- the given node's
+  interface, and whatever's on the opposite end, resolved automatically
+  via the same topology-resolution logic `set_link_quality` already
+  uses. Accepts either `node_id` or `node_name` (case-insensitive
+  substring match, matching the existing pattern from
+  `change_node_delay`'s `names` parameter) -- multiple name matches
+  return `selection_required` with the candidates listed, rather than
+  guessing. If the far side is network-attached, reports it as
+  `settable: false` with all four values `0` and the network's actual
+  name (resolved via `list_lab_networks`, falling back to the raw
+  `"network<id>"` token if that lookup fails) rather than just the
+  opaque topology token. Registered and enabled by default on PRO
+  (matching `set_link_quality`); tool-parity tests updated (four
+  edition-gated tools, not three). 14 new tests; `ruff check`,
+  `ruff format --check`, and `mypy` all clean.
+
+### Documentation
+- **README.md restructured for scannability**, per direct feedback that
+  it was still too word-heavy to scan quickly: Features section reduced
+  to one line per feature (plus a "sales pitch" bullet on bulk edits);
+  a new "Run App" section replacing "Choosing a transport" with three
+  bare `python -m mcp_eveng` command examples; "PRO vs Community
+  differences" renamed to "EVE-NG Pro vs Community MCP tools" (the
+  project itself has no PRO/Community version, only EVE-NG does),
+  moved after Configuration and before Available tools, and its
+  per-tool bullets reduced from full paragraphs to one line each, with
+  two long tangential paragraphs removed entirely; "Available tools"/
+  "Controlling which tools are exposed" renamed to "Available MCP
+  tools"/"Controlling which MCP tools are exposed" (every cross-
+  reference updated, including two stale ones found along the way); "A
+  note on sessions and relogin" moved to just above "Known issues",
+  its full content relocated to `docs/tools-reference.md`.
+- **`docs/capture-relay.md` steps reorganized** per direct feedback that
+  the `.env`-then-install split was confusing: "Append the public key"
+  and "Sudoers" split into their own EVE-NG-host-labeled steps; the two
+  install-and-configure steps reorganized by *app* (`mcp-relay` then
+  `mcp-eveng`) rather than by *file type*, each now including its own
+  install command (a missing `git clone` was also added); a "Start app
+  manually" step added after the systemd commands; the keypair step's
+  Windows example moved to last, followed immediately by a PowerShell
+  `icacls` permission-fix block; separate `PRO_SSH_*`/`COMMUNITY_SSH_*`
+  credential variables (previously incorrectly shared) in the `.bat`
+  reference.
+- **Two new pages, each linked from every relevant page**:
+  `docs/upgrading.md` (updating an existing `mcp-eveng`/`mcp-relay`
+  install, both systemd and manual/dev paths) and
+  `docs/manual-curl-commands.md` (testing the server directly over
+  HTTP without an MCP client -- every command in it, including the
+  full `initialize`/`notifications/initialized`/`tools/call` sequence,
+  was actually run against a live local server before being written
+  down, which is how a real gotcha was caught: the default
+  `MCP_ALLOWED_HOSTS=localhost:*` rejects `127.0.0.1`, only `localhost`
+  works).
 
 ## [0.3.17] - 2026-08-30
 
