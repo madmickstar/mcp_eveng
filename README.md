@@ -1,5 +1,9 @@
 # mcp-eveng
 
+[![CI](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml/badge.svg)](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) server that lets LLM
 clients (Claude Desktop, Claude Code, or any other MCP host) drive an
 [EVENG](https://www.eve-ng.net/) network emulator instance: create and edit labs,
