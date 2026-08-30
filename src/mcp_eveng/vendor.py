@@ -57,7 +57,6 @@ _VENDOR_ALIASES: dict[str, str] = {
     "Kerio": "Kerio",
     "Pulse Secure": "Pulse Secure",
     "Zscaler": "Zscaler",
-
     # --- Networking / infrastructure ---
     "Hewlett Packard Enterprise": "HPE",
     "Hewlett Packard": "HPE",
@@ -92,7 +91,6 @@ _VENDOR_ALIASES: dict[str, str] = {
     "Dell": "Dell",
     "Kemp": "Kemp",
     "Radware": "Radware",
-
     # --- Cloud / virtualization ---
     "Amazon Web Services": "AWS",
     "Amazon": "AWS",
@@ -108,18 +106,15 @@ _VENDOR_ALIASES: dict[str, str] = {
     "Red Hat": "Red Hat",
     "SUSE": "SUSE",
     "Canonical": "Canonical",
-
     # --- Storage / compute ---
     "NetApp": "NetApp",
     "Pure Storage": "Pure Storage",
     "Broadcom": "Broadcom",
     "NVIDIA": "NVIDIA",
-
     # --- SD-WAN / monitoring / misc tools ---
     "Aviatrix": "Aviatrix",
     "Infoblox": "Infoblox",
     "VyOS": "VyOS",
-
     # --- Explicit self-mappings for known single-word template
     # descriptions. These are no longer caught by a generic "first
     # word" fallback (see extract_vendor), so anything we want
@@ -131,7 +126,6 @@ _VENDOR_ALIASES: dict[str, str] = {
     "pfSense": "pfSense",
     "Plixer": "Plixer",
     "Zabbix": "Zabbix",
-
     # --- Aliases requested explicitly, not really "vendors" ---
     "Virtual PC": "VPCS",
 }

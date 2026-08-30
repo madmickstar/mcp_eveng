@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pydantic
 import pytest
 
 from mcp_eveng.capture_relay.config import CaptureSSHSettings, CaptureURLSettings, RelayListenSettings
@@ -35,7 +36,7 @@ def test_capture_ssh_settings_defaults() -> None:
 
 
 def test_capture_ssh_settings_requires_host_username_key_and_secret() -> None:
-    with pytest.raises(Exception):  # pydantic ValidationError
+    with pytest.raises(pydantic.ValidationError):
         CaptureSSHSettings(_env_file=None)  # type: ignore[call-arg]
 
 

@@ -22,9 +22,7 @@ async def test_login_success(client: EvengClient, base_url: str, httpx_mock: HTT
     assert client._authenticated is True
 
 
-async def test_login_failure_raises_auth_error(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_login_failure_raises_auth_error(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/auth/login",
@@ -53,9 +51,7 @@ async def test_get_status_returns_data(client: EvengClient, base_url: str, httpx
     assert result["data"]["version"] == "development"
 
 
-async def test_not_found_raises_not_found_error(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_not_found_raises_not_found_error(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/labs/User1/Missing.unl",
@@ -141,9 +137,7 @@ async def test_4xx_with_no_json_body_does_not_get_lock_file_message(
     assert "lock" not in str(exc_info.value).lower()
 
 
-async def test_401_triggers_relogin_and_retries(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_401_triggers_relogin_and_retries(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     # First call to /status: session expired.
     httpx_mock.add_response(
         method="GET",
@@ -308,9 +302,7 @@ async def test_ensure_authenticated_only_logs_in_once(
     assert len(requests) == 1
 
 
-async def test_add_lab_node_sends_expected_payload(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_add_lab_node_sends_expected_payload(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/labs/User1/Lab%201.unl/nodes",
@@ -338,9 +330,7 @@ async def test_add_lab_node_sends_expected_payload(
     assert body["top"] == "0"
 
 
-async def test_add_lab_node_never_omits_left_and_top(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_add_lab_node_never_omits_left_and_top(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     # Regression test for a real bug found live against an EVE-NG PRO
     # server: EVE-NG's own api_nodes.php (apiAddLabNode) reads
     # $_POST['left'] with no isset() check, so omitting it from the
@@ -375,9 +365,7 @@ async def test_add_lab_node_left_and_top_can_still_be_overridden(
         json={"code": 201, "status": "success", "message": "Lab has been saved (60023)."},
     )
 
-    await client.add_lab_node(
-        "/User1/Lab 1.unl", node_type="qemu", template="viosl2", left="35%", top="25%"
-    )
+    await client.add_lab_node("/User1/Lab 1.unl", node_type="qemu", template="viosl2", left="35%", top="25%")
 
     body = json.loads(httpx_mock.get_requests()[0].content)
     assert body["left"] == "35%"
@@ -539,9 +527,7 @@ async def test_context_manager_closes_owned_client(eveng_settings) -> None:
 # -- list_all_labs: recursion + loop safety ----------------------------------
 
 
-async def test_list_all_labs_walks_the_whole_tree(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_labs_walks_the_whole_tree(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",
@@ -574,9 +560,7 @@ async def test_list_all_labs_walks_the_whole_tree(
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_list_all_labs_never_revisits_a_folder(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_labs_never_revisits_a_folder(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     # Defense in depth: even if a folder listing (hypothetically, due to a
     # future/unexpected API response) referenced a folder already visited
     # -- not just literally named ".." -- the visited-set must still stop
@@ -640,9 +624,7 @@ async def test_list_all_labs_deduplicates_labs_by_path(
     assert labs[0]["path"] == "/root.unl"
 
 
-async def test_list_all_labs_respects_max_depth(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_labs_respects_max_depth(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",
@@ -667,9 +649,7 @@ async def test_list_all_labs_respects_max_depth(
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_list_all_labs_respects_max_folders(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_labs_respects_max_folders(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",
@@ -697,9 +677,7 @@ async def test_list_all_labs_respects_max_folders(
 # -- list_all_folders: recursion + loop safety -------------------------------
 
 
-async def test_list_all_folders_walks_the_whole_tree(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_folders_walks_the_whole_tree(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",
@@ -761,9 +739,7 @@ async def test_list_all_folders_never_revisits_a_folder(
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_list_all_folders_respects_max_depth(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_folders_respects_max_depth(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",
@@ -782,9 +758,7 @@ async def test_list_all_folders_respects_max_depth(
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_list_all_folders_respects_max_folders(
-    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
-) -> None:
+async def test_list_all_folders_respects_max_folders(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/folders/",

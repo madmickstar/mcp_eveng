@@ -153,9 +153,7 @@ async def test_telnet_session_strips_iac_sequences_from_transcript() -> None:
     banner = bytes([IAC, 253, 3]) + b"Switch>"  # IAC DO 3, then the real banner
     open_conn, writer = _fake_open_connection([banner])
 
-    transcript = await telnet_session(
-        "host", 1234, ["show version"], idle_timeout=0.05, open_connection=open_conn
-    )
+    transcript = await telnet_session("host", 1234, ["show version"], idle_timeout=0.05, open_connection=open_conn)
 
     assert transcript == "Switch>"
     # The refusal reply (IAC WONT 3) must have been written back.

@@ -26,7 +26,8 @@ based on stale/cached state from an earlier call.
 from __future__ import annotations
 
 import re
-from typing import Any, Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any
 
 
 def format_bullets(items: Sequence[str]) -> str:
@@ -110,8 +111,7 @@ async def run_delete_flow(
             return {
                 "status": "error",
                 "message": (
-                    f"Could not match {bad!r} to any current {noun}. Current matches:\n"
-                    f"{format_numbered(labels)}"
+                    f"Could not match {bad!r} to any current {noun}. Current matches:\n{format_numbered(labels)}"
                 ),
                 "data": {"matches": labels},
             }
@@ -119,8 +119,7 @@ async def run_delete_flow(
             return {
                 "status": "error",
                 "message": (
-                    f"Only one {noun} can be deleted at a time here. Pick exactly one:\n"
-                    f"{format_numbered(labels)}"
+                    f"Only one {noun} can be deleted at a time here. Pick exactly one:\n{format_numbered(labels)}"
                 ),
                 "data": {"matches": labels},
             }
@@ -150,8 +149,7 @@ async def run_delete_flow(
         return {
             "status": "confirmation_required",
             "message": (
-                f"{format_numbered(target_labels)}\n\n"
-                f"Reply 'accept' or 'yes' to delete the above {noun}{plural}."
+                f"{format_numbered(target_labels)}\n\nReply 'accept' or 'yes' to delete the above {noun}{plural}."
             ),
             "data": {"matches": target_labels},
         }
@@ -168,9 +166,8 @@ async def run_delete_flow(
     if skipped:
         detail = "\n\n".join(f"{label}: {reason}" for label, reason in skipped)
         message = (
-            (f"Deleted: {', '.join(deleted)}. " if deleted else "")
-            + f"The following could not be deleted:\n{detail}"
-        )
+            f"Deleted: {', '.join(deleted)}. " if deleted else ""
+        ) + f"The following could not be deleted:\n{detail}"
         return {"status": "partial" if deleted else "error", "message": message}
 
     plural = "s" if len(deleted) != 1 else ""

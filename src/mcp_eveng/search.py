@@ -41,10 +41,7 @@ def iter_named_records(data: Any, name_field: str) -> list[tuple[str, dict[str, 
     return []
 
 
-def find_by_name_case_insensitive(
-    records: list[tuple[str, dict[str, Any]]], target: str
-) -> list[dict[str, Any]]:
+def find_by_name_case_insensitive(records: list[tuple[str, dict[str, Any]]], target: str) -> list[dict[str, Any]]:
     """Case-insensitive substring match of `target` against record names."""
     needle = target.strip().lower()
     return [record for name, record in records if needle in name.strip().lower()]
-

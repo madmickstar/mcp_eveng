@@ -8,7 +8,8 @@ is the thin adapter that exposes each one as an MCP tool.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -23,9 +24,7 @@ async def get_status(client: EvengClient) -> dict[str, Any]:
     return await client.get_status()
 
 
-async def list_node_templates(
-    client: EvengClient, include_without_images: bool = False
-) -> dict[str, Any]:
+async def list_node_templates(client: EvengClient, include_without_images: bool = False) -> dict[str, Any]:
     """List node templates EVENG knows about, with vendor context.
 
     By default only lists templates that have at least one image
@@ -105,16 +104,16 @@ async def list_user_roles(client: EvengClient) -> dict[str, Any]:
     return await client.list_user_roles()
 
 
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("get_status"):
+
         @mcp.tool(name="get_status")
         async def _get_status() -> dict[str, Any]:
             """Get EVENG server status: CPU, RAM, disk usage and version info."""
             return await get_status(await get_client())
 
     if enabled("list_node_templates"):
+
         @mcp.tool(name="list_node_templates")
         async def _list_node_templates(include_without_images: bool = False) -> dict[str, Any]:
             """List node templates EVENG knows about, with vendor context.
@@ -132,6 +131,7 @@ def register(
             return await list_node_templates(await get_client(), include_without_images)
 
     if enabled("get_node_template"):
+
         @mcp.tool(name="get_node_template")
         async def _get_node_template(template: str) -> dict[str, Any]:
             """Get details (available images, default options) for one node template.
@@ -154,12 +154,14 @@ def register(
             return await get_node_template(await get_client(), template)
 
     if enabled("list_network_types"):
+
         @mcp.tool(name="list_network_types")
         async def _list_network_types() -> dict[str, Any]:
             """List available network/cloud types (bridge, ovs, pnetX, ...) for lab networks."""
             return await list_network_types(await get_client())
 
     if enabled("list_user_roles"):
+
         @mcp.tool(name="list_user_roles")
         async def _list_user_roles() -> dict[str, Any]:
             """List valid EVENG user roles (admin, editor, user)."""

@@ -144,9 +144,7 @@ async def test_get_capture_requires_exactly_one_of_position_or_container() -> No
     client = make_client()
 
     neither = await capture.get_capture(client, ssh_settings(), url_settings())
-    both = await capture.get_capture(
-        client, ssh_settings(), url_settings(), position=1, container="Capture-2101248"
-    )
+    both = await capture.get_capture(client, ssh_settings(), url_settings(), position=1, container="Capture-2101248")
 
     assert neither["status"] == "error"
     assert both["status"] == "error"

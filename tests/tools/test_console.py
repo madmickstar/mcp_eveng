@@ -74,16 +74,10 @@ async def test_telnet_node_success_calls_telnet_session_with_parsed_host_port() 
         "data": {"status": 2, "console": "telnet", "url": "telnet://172.16.130.14:41041"},
     }
 
-    with patch(
-        "mcp_eveng.tools.console.telnet_session", new=AsyncMock(return_value="Switch#")
-    ) as mock_session:
-        result = await console.telnet_node(
-            client, "/User1/Lab 1.unl", 9, ["vlan 20", "name testing"], wait_seconds=3.0
-        )
+    with patch("mcp_eveng.tools.console.telnet_session", new=AsyncMock(return_value="Switch#")) as mock_session:
+        result = await console.telnet_node(client, "/User1/Lab 1.unl", 9, ["vlan 20", "name testing"], wait_seconds=3.0)
 
-    mock_session.assert_awaited_once_with(
-        "172.16.130.14", 41041, ["vlan 20", "name testing"], idle_timeout=3.0
-    )
+    mock_session.assert_awaited_once_with("172.16.130.14", 41041, ["vlan 20", "name testing"], idle_timeout=3.0)
     assert result["status"] == "success"
     assert result["data"]["transcript"] == "Switch#"
 

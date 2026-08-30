@@ -121,9 +121,7 @@ async def test_delete_folder_selection_by_exact_path_then_confirm() -> None:
     client.list_folder.return_value = {"status": "success", "data": {"folders": [], "labs": []}}
     client.delete_folder.return_value = {"status": "success"}
 
-    result = await folders.delete_folder(
-        client, "Test", selection="/User2/Test", confirm=True
-    )
+    result = await folders.delete_folder(client, "Test", selection="/User2/Test", confirm=True)
 
     client.delete_folder.assert_awaited_once_with("/User2/Test")
     assert result["status"] == "success"
@@ -154,13 +152,9 @@ async def test_delete_folder_searches_from_given_search_path() -> None:
 async def test_add_lab_network_forwards_kwargs() -> None:
     client = make_client(add_lab_network={"status": "success"})
 
-    await networks.add_lab_network(
-        client, "/User1/Lab 1.unl", "bridge", name="Core", left="35%", top="25%"
-    )
+    await networks.add_lab_network(client, "/User1/Lab 1.unl", "bridge", name="Core", left="35%", top="25%")
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "bridge", name="Core", left="35%", top="25%"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "bridge", name="Core", left="35%", top="25%")
 
 
 async def test_add_lab_network_never_forwards_bare_none_for_left_or_top() -> None:
@@ -172,9 +166,7 @@ async def test_add_lab_network_never_forwards_bare_none_for_left_or_top() -> Non
 
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "bridge")
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "bridge", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "bridge", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_hideme_omitted_by_default() -> None:
@@ -226,9 +218,7 @@ async def test_add_lab_network_type_by_exact_name_does_not_prompt() -> None:
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "bridge")
 
     client.list_network_types.assert_not_awaited()
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "bridge", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "bridge", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_cloud_alias_resolves_to_pnet0() -> None:
@@ -237,9 +227,7 @@ async def test_add_lab_network_type_cloud_alias_resolves_to_pnet0() -> None:
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "cloud")
 
     client.list_network_types.assert_not_awaited()
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "pnet0", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "pnet0", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_cloud0_through_cloud9_resolve_to_matching_pnet() -> None:
@@ -248,9 +236,7 @@ async def test_add_lab_network_type_cloud0_through_cloud9_resolve_to_matching_pn
 
         await networks.add_lab_network(client, "/User1/Lab 1.unl", f"cloud{i}")
 
-        client.add_lab_network.assert_awaited_once_with(
-            "/User1/Lab 1.unl", f"pnet{i}", name=None, left="0", top="0"
-        )
+        client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", f"pnet{i}", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_cloud_alias_is_case_insensitive() -> None:
@@ -258,9 +244,7 @@ async def test_add_lab_network_type_cloud_alias_is_case_insensitive() -> None:
 
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "Cloud5")
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "pnet5", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "pnet5", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_cloud10_is_not_a_recognized_alias() -> None:
@@ -271,9 +255,7 @@ async def test_add_lab_network_type_cloud10_is_not_a_recognized_alias() -> None:
 
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "cloud10")
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "cloud10", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "cloud10", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_by_number_resolves() -> None:
@@ -287,9 +269,7 @@ async def test_add_lab_network_type_by_number_resolves() -> None:
     await networks.add_lab_network(client, "/User1/Lab 1.unl", "2")
 
     # sorted -> ["bridge", "nat0", "pnet0"]; "2" -> "nat0"
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", "nat0", name=None, left="0", top="0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", "nat0", name=None, left="0", top="0")
 
 
 async def test_add_lab_network_type_by_number_out_of_range_is_error() -> None:
@@ -322,13 +302,9 @@ async def test_edit_lab_network_forwards_only_supplied_fields() -> None:
 async def test_edit_lab_network_forwards_multiple_fields() -> None:
     client = make_client(edit_lab_network={"status": "success"})
 
-    await networks.edit_lab_network(
-        client, "/User1/Lab 1.unl", 7, name="Backbone", hideme=1, color="#FF0000"
-    )
+    await networks.edit_lab_network(client, "/User1/Lab 1.unl", 7, name="Backbone", hideme=1, color="#FF0000")
 
-    client.edit_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", 7, name="Backbone", hideme=1, color="#FF0000"
-    )
+    client.edit_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", 7, name="Backbone", hideme=1, color="#FF0000")
 
 
 async def test_delete_lab_network_requires_non_empty_name() -> None:
@@ -365,9 +341,7 @@ async def test_delete_lab_network_allows_multiple() -> None:
     }
     client.delete_lab_network.return_value = {"status": "success"}
 
-    result = await networks.delete_lab_network(
-        client, "/User1/Lab 1.unl", "test", selection="1,2", confirm=True
-    )
+    result = await networks.delete_lab_network(client, "/User1/Lab 1.unl", "test", selection="1,2", confirm=True)
 
     assert client.delete_lab_network.await_count == 2
     assert result["status"] == "success"
@@ -391,9 +365,7 @@ async def test_add_user_forwards_fields() -> None:
 
     await users.add_user(client, "op1", "pw", name="Operator", email="op@example.com", role="editor")
 
-    client.add_user.assert_awaited_once_with(
-        "op1", "pw", name="Operator", email="op@example.com", role="editor"
-    )
+    client.add_user.assert_awaited_once_with("op1", "pw", name="Operator", email="op@example.com", role="editor")
 
 
 async def test_edit_user_only_sends_changed_fields() -> None:

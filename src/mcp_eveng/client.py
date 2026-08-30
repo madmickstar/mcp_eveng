@@ -60,7 +60,7 @@ class EvengClient:
 
     # -- lifecycle -----------------------------------------------------
 
-    async def __aenter__(self) -> "EvengClient":
+    async def __aenter__(self) -> EvengClient:
         return self
 
     async def __aexit__(
@@ -643,9 +643,7 @@ class EvengClient:
         assert result is not None
         return result
 
-    async def set_node_interface(
-        self, lab_path: str, node_id: int, interface_index: int, network_id: int
-    ) -> JsonDict:
+    async def set_node_interface(self, lab_path: str, node_id: int, interface_index: int, network_id: int) -> JsonDict:
         """Wire one of a node's interfaces to a network.
 
         EVE-NG has no dedicated "connect two nodes" endpoint -- this is
@@ -657,9 +655,7 @@ class EvengClient:
         /nodes/{id}/interfaces` with a body of `{"<index>": "<network_id>"}`.
         """
         payload = {str(interface_index): str(network_id)}
-        result = await self._put(
-            f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces", json=payload
-        )
+        result = await self._put(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces", json=payload)
         assert result is not None
         return result
 

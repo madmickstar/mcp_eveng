@@ -71,14 +71,15 @@ async def test_create_server_registers_every_enabled_tool_by_default() -> None:
     # the built-in defaults, which disable the six user-management tools
     # and enable everything else.
     settings = MCPTransportSettings(
-        tools_config_path="/nonexistent-path-for-tests/tools.env", _env_file=None  # type: ignore[call-arg]
+        tools_config_path="/nonexistent-path-for-tests/tools.env",
+        _env_file=None,  # type: ignore[call-arg]
     )
     mcp = create_server(settings, "stdio")
 
     tools = await mcp.list_tools()
     tool_names = {t.name for t in tools}
 
-    assert (EXPECTED_TOOLS - DISABLED_BY_DEFAULT_TOOLS) <= tool_names
+    assert tool_names >= (EXPECTED_TOOLS - DISABLED_BY_DEFAULT_TOOLS)
     assert tool_names.isdisjoint(DISABLED_BY_DEFAULT_TOOLS)
 
 
@@ -88,7 +89,8 @@ async def test_create_server_respects_tools_config_file(tmp_path) -> None:
     config_file = tmp_path / "tools.env"
     config_file.write_text("list_users=enabled\nget_status=disabled\n")
     settings = MCPTransportSettings(
-        tools_config_path=str(config_file), _env_file=None  # type: ignore[call-arg]
+        tools_config_path=str(config_file),
+        _env_file=None,  # type: ignore[call-arg]
     )
 
     mcp = create_server(settings, "stdio")
@@ -142,7 +144,10 @@ async def test_create_server_rejects_non_loopback_host_without_allowed_hosts() -
     # exercises the explicit opt-out (MCP_ALLOWED_HOSTS="") to confirm the
     # rejection path still exists for a non-loopback host with no allowlist.
     settings = MCPTransportSettings(
-        host="0.0.0.0", port=8000, allowed_hosts="", _env_file=None  # type: ignore[call-arg]
+        host="0.0.0.0",
+        port=8000,
+        allowed_hosts="",
+        _env_file=None,  # type: ignore[call-arg]
     )
 
     with pytest.raises(RuntimeError, match="MCP_ALLOWED_HOSTS"):
@@ -173,7 +178,9 @@ async def test_create_server_skips_host_check_for_stdio() -> None:
 async def test_create_server_stateless_http_follows_stateful_flag() -> None:
     stateful_settings = MCPTransportSettings(host="127.0.0.1", _env_file=None)  # type: ignore[call-arg]
     stateless_settings = MCPTransportSettings(
-        host="127.0.0.1", stateful=False, _env_file=None  # type: ignore[call-arg]
+        host="127.0.0.1",
+        stateful=False,
+        _env_file=None,  # type: ignore[call-arg]
     )
 
     stateful_mcp = create_server(stateful_settings, "streamable-http")
@@ -206,12 +213,8 @@ def test_run_handles_keyboard_interrupt_gracefully(monkeypatch, capsys) -> None:
         def run(self, transport: str) -> None:  # noqa: ARG002
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(
-        server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None)
-    )
-    monkeypatch.setattr(
-        server_module, "create_server", lambda settings, transport: _FakeMCP()
-    )
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "create_server", lambda settings, transport: _FakeMCP())
 
     with pytest.raises(SystemExit) as exc_info:
         server_module.run("stdio")

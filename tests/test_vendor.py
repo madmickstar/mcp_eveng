@@ -167,4 +167,3 @@ def test_has_image_matches_live_community_catalog_samples() -> None:
         assert has_image(description) is True, description
     for description in not_installed:
         assert has_image(description) is False, description
-

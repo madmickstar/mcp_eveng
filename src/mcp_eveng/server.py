@@ -57,9 +57,7 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
         await close_client()
 
 
-def _build_transport_security(
-    settings: MCPTransportSettings, transport: Transport
-) -> TransportSecuritySettings | None:
+def _build_transport_security(settings: MCPTransportSettings, transport: Transport) -> TransportSecuritySettings | None:
     """Build the Host-header allowlist that guards the sse/streamable-http listeners.
 
     stdio never opens a socket, so it needs none of this.
@@ -88,9 +86,7 @@ def _build_transport_security(
     )
 
 
-def create_server(
-    settings: MCPTransportSettings | None = None, transport: Transport = "stdio"
-) -> FastMCP:
+def create_server(settings: MCPTransportSettings | None = None, transport: Transport = "stdio") -> FastMCP:
     """Build a fully-configured `FastMCP` instance with every EVENG tool registered."""
     settings = settings or get_mcp_settings()
     transport_security = _build_transport_security(settings, transport)

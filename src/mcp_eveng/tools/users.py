@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -45,9 +46,7 @@ async def edit_user(
 ) -> dict[str, Any]:
     """Edit an existing EVENG user. Only supplied fields are changed."""
     fields = {
-        k: v
-        for k, v in {"name": name, "email": email, "password": password, "role": role}.items()
-        if v is not None
+        k: v for k, v in {"name": name, "email": email, "password": password, "role": role}.items() if v is not None
     }
     return await client.edit_user(username, **fields)
 
@@ -62,9 +61,7 @@ def _username_of(user: dict[str, Any]) -> str:
     return str(user.get("username", user.get("_key", "?")))
 
 
-async def delete_user(
-    client: EvengClient, username: str, selection: str = "", confirm: bool = False
-) -> dict[str, Any]:
+async def delete_user(client: EvengClient, username: str, selection: str = "", confirm: bool = False) -> dict[str, Any]:
     """Delete an existing EVENG user, matched by username substring (case-insensitive).
 
     Search -> select -> confirm, no special MCP host capability required:
@@ -104,16 +101,16 @@ async def delete_user(
     )
 
 
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("list_users"):
+
         @mcp.tool(name="list_users")
         async def _list_users() -> dict[str, Any]:
             """List every EVENG user account."""
             return await list_users(await get_client())
 
     if enabled("get_user"):
+
         @mcp.tool(name="get_user")
         async def _get_user(username: str) -> dict[str, Any]:
             """Get details for a single EVENG user.
@@ -124,6 +121,7 @@ def register(
             return await get_user(await get_client(), username)
 
     if enabled("add_user"):
+
         @mcp.tool(name="add_user")
         async def _add_user(
             username: str,
@@ -144,6 +142,7 @@ def register(
             return await add_user(await get_client(), username, password, name=name, email=email, role=role)
 
     if enabled("edit_user"):
+
         @mcp.tool(name="edit_user")
         async def _edit_user(
             username: str,
@@ -161,15 +160,12 @@ def register(
                 password: New password, if changing.
                 role: New role, if changing.
             """
-            return await edit_user(
-                await get_client(), username, name=name, email=email, password=password, role=role
-            )
+            return await edit_user(await get_client(), username, name=name, email=email, password=password, role=role)
 
     if enabled("delete_user"):
+
         @mcp.tool(name="delete_user")
-        async def _delete_user(
-            username: str = "", selection: str = "", confirm: bool = False
-        ) -> dict[str, Any]:
+        async def _delete_user(username: str = "", selection: str = "", confirm: bool = False) -> dict[str, Any]:
             """Delete an existing EVENG user, matched by username substring (case-insensitive).
 
             Search -> select -> confirm flow (see module docs). Only one user

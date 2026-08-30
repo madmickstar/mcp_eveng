@@ -37,10 +37,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--http",
         action="store_true",
         default=False,
-        help=(
-            "Serve over the Streamable HTTP transport (network-exposed, recommended). "
-            "Uses MCP_* env vars."
-        ),
+        help=("Serve over the Streamable HTTP transport (network-exposed, recommended). Uses MCP_* env vars."),
     )
     return parser.parse_args(argv)
 

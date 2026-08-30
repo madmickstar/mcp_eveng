@@ -74,9 +74,7 @@ async def test_list_node_templates_annotates_vendor_and_has_image() -> None:
 
 
 async def test_list_node_templates_strips_hided_suffix_when_included() -> None:
-    client = make_client(
-        list_node_templates={"status": "success", "data": {"asa": "Cisco ASA.hided"}}
-    )
+    client = make_client(list_node_templates={"status": "success", "data": {"asa": "Cisco ASA.hided"}})
 
     result = await system.list_node_templates(client, include_without_images=True)
 

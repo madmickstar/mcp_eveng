@@ -18,6 +18,7 @@ client (or EVE-NG's own web console button) connects to.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 
 IAC = 255
@@ -145,9 +146,7 @@ async def telnet_session(
 
     for attempt in range(connect_attempts):
         try:
-            reader, writer = await asyncio.wait_for(
-                open_connection(host, port), timeout=connect_timeout
-            )
+            reader, writer = await asyncio.wait_for(open_connection(host, port), timeout=connect_timeout)
             break
         except (OSError, asyncio.TimeoutError) as exc:
             last_error = exc
@@ -155,9 +154,7 @@ async def telnet_session(
                 await asyncio.sleep(connect_retry_delay)
 
     if reader is None or writer is None:
-        raise ConnectionError(
-            f"Could not connect to {host}:{port} after {connect_attempts} attempt(s): {last_error}"
-        )
+        raise ConnectionError(f"Could not connect to {host}:{port} after {connect_attempts} attempt(s): {last_error}")
 
     transcript = bytearray()
     pending = bytearray()
@@ -181,9 +178,7 @@ async def telnet_session(
             await _drain_available()
     finally:
         writer.close()
-        try:
+        with contextlib.suppress(Exception):  # best-effort close; the session's already done its job
             await writer.wait_closed()
-        except Exception:
-            pass  # best-effort close; the session's already done its job
 
     return transcript.decode(errors="replace")

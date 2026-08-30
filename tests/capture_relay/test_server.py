@@ -105,10 +105,7 @@ async def test_stream_capture_stops_on_eof() -> None:
     request = FakeRequest([])
 
     chunks = [
-        chunk
-        async for chunk in _stream_capture(
-            ssh_settings(), "Capture-2101248", request, fake_open_stream([])
-        )
+        chunk async for chunk in _stream_capture(ssh_settings(), "Capture-2101248", request, fake_open_stream([]))
     ]
 
     assert chunks == []

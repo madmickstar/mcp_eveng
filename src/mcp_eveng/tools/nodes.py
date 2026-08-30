@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Iterator
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -63,10 +63,7 @@ async def list_lab_nodes(client: EvengClient, lab_path: str, node_id: int | None
             for key, node in data.items()
         }
     elif isinstance(data, list):
-        annotated = [
-            (_annotate_with_vendor(node, vendor_map) if isinstance(node, dict) else node)
-            for node in data
-        ]
+        annotated = [(_annotate_with_vendor(node, vendor_map) if isinstance(node, dict) else node) for node in data]
     else:
         annotated = data
 
@@ -234,17 +231,12 @@ def _parse_position_int(value: Any) -> int | None:
         return None
 
 
-def _position_is_free(
-    candidate: tuple[int, int], existing: list[tuple[int, int]], gap: int = _OVERLAP_GAP
-) -> bool:
+def _position_is_free(candidate: tuple[int, int], existing: list[tuple[int, int]], gap: int = _OVERLAP_GAP) -> bool:
     """A candidate position conflicts with an existing node if both axes
     are within `gap` of it -- i.e. an existing node "claims" a `gap`-radius
     box around itself, not just an exact-match position."""
     cleft, ctop = candidate
-    for eleft, etop in existing:
-        if abs(cleft - eleft) < gap and abs(ctop - etop) < gap:
-            return False
-    return True
+    return all(not (abs(cleft - eleft) < gap and abs(ctop - etop) < gap) for eleft, etop in existing)
 
 
 async def _next_free_position(client: EvengClient, lab_path: str) -> tuple[str, str]:
@@ -400,10 +392,7 @@ async def add_lab_node(
                 ),
                 "data": {"images": image_names},
             }
-        if len(image_names) == 1:
-            resolved_image = image_names[0]
-        else:
-            resolved_image = _template_option_str(options, "image")
+        resolved_image = image_names[0] if len(image_names) == 1 else _template_option_str(options, "image")
 
     resolved_node_type = node_type or str(template_data.get("type") or "qemu")
     resolved_name = name or _template_option_str(options, "name")
@@ -411,9 +400,7 @@ async def add_lab_node(
     resolved_icon = _template_option_str(options, "icon") or "Router.png"
     resolved_ram = ram if ram is not None else _template_option_int(options, "ram")
     resolved_cpu = cpu if cpu is not None else (_template_option_int(options, "cpu") or 1)
-    resolved_ethernet = (
-        ethernet if ethernet is not None else _template_option_int(options, "ethernet")
-    )
+    resolved_ethernet = ethernet if ethernet is not None else _template_option_int(options, "ethernet")
 
     resolved_extra = _template_extra_options(options)
 
@@ -450,7 +437,10 @@ async def add_lab_node(
 
 
 def _node_id(node: dict[str, Any]) -> int:
-    return int(node.get("id", node.get("_key")))
+    raw_id = node.get("id", node.get("_key"))
+    if raw_id is None:
+        raise ValueError(f"node record has neither 'id' nor '_key': {node!r}")
+    return int(raw_id)
 
 
 def _node_name(node: dict[str, Any]) -> str:
@@ -567,9 +557,7 @@ def _is_running(node_data: dict[str, Any]) -> bool:
         return True
 
 
-async def _find_duplicate_name(
-    client: EvengClient, lab_path: str, node_id: int, name: str
-) -> dict[str, Any] | None:
+async def _find_duplicate_name(client: EvengClient, lab_path: str, node_id: int, name: str) -> dict[str, Any] | None:
     """Find another node (not `node_id`) already using `name` (case-insensitive exact match)."""
     result = await client.list_lab_nodes(lab_path)
     data = result.get("data") or {}
@@ -577,7 +565,7 @@ async def _find_duplicate_name(
     for existing_name, record in iter_named_records(data, "name"):
         record_id = record.get("id", record.get("_key"))
         try:
-            record_id_int = int(record_id)
+            record_id_int = int(record_id)  # type: ignore[arg-type]  # deliberately unguarded -- caught below
         except (TypeError, ValueError):
             continue
         if record_id_int == node_id:
@@ -744,16 +732,17 @@ async def _search_nodes_by_name(client: EvengClient, lab_path: str, name: str) -
     data = result.get("data") or {}
     needle = name.strip().lower()
     matches = [
-        node
-        for _key, node in iter_named_records(data, "name")
-        if needle in str(node.get("name", "")).strip().lower()
+        node for _key, node in iter_named_records(data, "name") if needle in str(node.get("name", "")).strip().lower()
     ]
     matches.sort(key=lambda n: int(n.get("id", n.get("_key", 0))))
     return matches
 
 
 def _delay_node_id(node: dict[str, Any]) -> int:
-    return int(node.get("id", node.get("_key")))
+    raw_id = node.get("id", node.get("_key"))
+    if raw_id is None:
+        raise ValueError(f"node record has neither 'id' nor '_key': {node!r}")
+    return int(raw_id)
 
 
 def _delay_node_label(node: dict[str, Any]) -> str:
@@ -897,14 +886,11 @@ async def change_node_delay(
         if not ordered_targets:
             return {"status": "error", "message": "`order` didn't resolve to any nodes."}
 
-    assignments = [
-        (node, resolved_increment * (position + 1)) for position, node in enumerate(ordered_targets)
-    ]
+    assignments = [(node, resolved_increment * (position + 1)) for position, node in enumerate(ordered_targets)]
 
     if not confirm:
         labels = [
-            f"{node.get('name', '?')} (id {_delay_node_id(node)}): "
-            f"{node.get('delay', '?')}s -> {new_delay}s"
+            f"{node.get('name', '?')} (id {_delay_node_id(node)}): {node.get('delay', '?')}s -> {new_delay}s"
             for node, new_delay in assignments
         ]
         plural = "s" if len(assignments) != 1 else ""
@@ -1103,7 +1089,7 @@ async def edit_lab_nodes_by_template(
             "status": "error",
             "message": (
                 "At least a vendor or a template name/fragment is required to start "
-                "(e.g. vendor=\"cisco\" or template=\"vios\")."
+                '(e.g. vendor="cisco" or template="vios").'
             ),
         }
 
@@ -1111,9 +1097,7 @@ async def edit_lab_nodes_by_template(
     if not by_template:
         return {
             "status": "cancelled",
-            "message": (
-                f"No node found matching vendor={vendor!r} template={template!r}."
-            ),
+            "message": (f"No node found matching vendor={vendor!r} template={template!r}."),
         }
 
     template_ids = sorted(by_template)
@@ -1172,7 +1156,7 @@ async def edit_lab_nodes_by_template(
             "message": (
                 f"Template {resolved_template_id!r} has {len(template_nodes)} node(s):\n"
                 f"{format_numbered(node_labels)}\n\n"
-                "Reply with `node_selection` set to \"all\", or the number(s)/exact "
+                'Reply with `node_selection` set to "all", or the number(s)/exact '
                 "name(s) (space/comma separated) of the ones you want."
             ),
             "data": {"matches": node_labels},
@@ -1286,10 +1270,7 @@ async def edit_lab_nodes_by_template(
         if not image_matches:
             return {
                 "status": "cancelled",
-                "message": (
-                    f"No image found matching {image_search!r} for template "
-                    f"{resolved_template_id!r}."
-                ),
+                "message": (f"No image found matching {image_search!r} for template {resolved_template_id!r}."),
             }
         if len(image_matches) == 1:
             resolved_image = image_matches[0]
@@ -1356,7 +1337,7 @@ async def edit_lab_nodes_by_template(
 
     updated: list[str] = []
     for node in target_nodes:
-        target_id = int(node.get("id", node.get("_key")))
+        target_id = _node_id(node)
         node_name = str(node.get("name", f"id {target_id}"))
         if _is_running(node):
             await client.stop_node(lab_path, target_id)
@@ -1477,9 +1458,7 @@ def _resolve_interface_selection(
         return {"status": "error", "message": "no available (unconnected) ethernet interfaces"}
 
     needle = text.lower()
-    matches = [
-        (index, iface) for index, iface in available if needle in str(iface.get("name", "")).strip().lower()
-    ]
+    matches = [(index, iface) for index, iface in available if needle in str(iface.get("name", "")).strip().lower()]
 
     if not matches:
         described = f" matching {interface!r}" if text else ""
@@ -1505,8 +1484,7 @@ def _resolve_interface_selection(
         return {
             "status": "error",
             "message": (
-                f"Could not match {selection!r} to any current interface. Current "
-                f"matches:\n{format_numbered(labels)}"
+                f"Could not match {selection!r} to any current interface. Current matches:\n{format_numbered(labels)}"
             ),
             "data": {"matches": labels},
         }
@@ -1537,9 +1515,7 @@ def _connected_network_description(interfaces_data: dict[str, Any], index: int) 
     return f"network {network_id}"
 
 
-async def _ensure_stopped_for_connection(
-    client: EvengClient, lab_path: str, node_id: int, is_pro: bool
-) -> bool:
+async def _ensure_stopped_for_connection(client: EvengClient, lab_path: str, node_id: int, is_pro: bool) -> bool:
     """Stop `node_id` first if this is Community edition and it's running.
 
     No-op on PRO (hot interface wiring is supported there). Returns
@@ -1585,9 +1561,7 @@ async def _wait_for_network_ready(
         data = result.get("data") or {}
         if isinstance(data, dict) and str(network_id) in data:
             return True
-        if isinstance(data, list) and any(
-            isinstance(n, dict) and n.get("id") == network_id for n in data
-        ):
+        if isinstance(data, list) and any(isinstance(n, dict) and n.get("id") == network_id for n in data):
             return True
         if attempt < attempts - 1:
             await asyncio.sleep(delay_seconds)
@@ -1707,6 +1681,7 @@ async def connect_interface(
     dst_index: int | None = None
 
     if node_to_node:
+        assert target_node_id is not None  # guaranteed by node_to_node's own definition above
         dst_result = await client.get_node_interfaces(lab_path, target_node_id)
         dst_data = dst_result.get("data") or {}
         if not isinstance(dst_data, dict):
@@ -1738,9 +1713,7 @@ async def connect_interface(
             networks_result = await client.list_lab_networks(lab_path)
             networks_data = networks_result.get("data") or {}
             needle = (network_name or "").strip().lower()
-            candidates = (
-                list(networks_data.items()) if isinstance(networks_data, dict) else []
-            )
+            candidates = list(networks_data.items()) if isinstance(networks_data, dict) else []
             matches = [
                 (key, net)
                 for key, net in candidates
@@ -1772,20 +1745,16 @@ async def connect_interface(
     stopped_nodes: list[int] = []
     if await _ensure_stopped_for_connection(client, lab_path, node_id, is_pro):
         stopped_nodes.append(node_id)
-    if node_to_node and await _ensure_stopped_for_connection(
-        client, lab_path, target_node_id, is_pro
-    ):
+    if target_node_id is not None and await _ensure_stopped_for_connection(client, lab_path, target_node_id, is_pro):
         stopped_nodes.append(target_node_id)
 
     stop_note = ""
     if stopped_nodes:
         ids = ", ".join(str(n) for n in stopped_nodes)
-        stop_note = (
-            f" (Community edition: stopped node(s) {ids} first, since interfaces "
-            "can't be wired while running.)"
-        )
+        stop_note = f" (Community edition: stopped node(s) {ids} first, since interfaces can't be wired while running.)"
 
     if node_to_node:
+        assert target_node_id is not None and dst_index is not None  # guaranteed by node_to_node's own definition
         network_result = await client.add_lab_network(
             lab_path,
             network_type="bridge",
@@ -1795,10 +1764,7 @@ async def connect_interface(
         if new_network_id is None:
             return {
                 "status": "error",
-                "message": (
-                    "Created the backing bridge network but couldn't read back its "
-                    f"id.{stop_note}"
-                ),
+                "message": (f"Created the backing bridge network but couldn't read back its id.{stop_note}"),
             }
         new_network_id = int(new_network_id)
 
@@ -1839,14 +1805,12 @@ async def connect_interface(
             ),
         }
 
+    assert resolved_network_id is not None  # guaranteed by the node_to_network branch above
     await client.set_node_interface(lab_path, node_id, src_index, int(resolved_network_id))
 
     return {
         "status": "success",
-        "message": (
-            f"Connected node {node_id} (interface {src_index}) to network "
-            f"{resolved_network_id}.{stop_note}"
-        ),
+        "message": (f"Connected node {node_id} (interface {src_index}) to network {resolved_network_id}.{stop_note}"),
     }
 
 
@@ -1854,8 +1818,7 @@ async def _all_node_ids_and_names(client: EvengClient, lab_path: str) -> list[tu
     result = await client.list_lab_nodes(lab_path)
     data = result.get("data") or {}
     pairs = [
-        (int(node.get("id", key)), str(node.get("name", f"id {key}")))
-        for key, node in iter_named_records(data, "name")
+        (int(node.get("id", key)), str(node.get("name", f"id {key}"))) for key, node in iter_named_records(data, "name")
     ]
     pairs.sort(key=lambda p: p[0])
     return pairs
@@ -1978,10 +1941,9 @@ async def export_node(client: EvengClient, lab_path: str, node_id: int | None = 
     return await client.export_node(lab_path, node_id)
 
 
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("list_lab_nodes"):
+
         @mcp.tool(name="list_lab_nodes")
         async def _list_lab_nodes(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """List all nodes in a lab, or get a single node by id (includes console URL/status).
@@ -1996,6 +1958,7 @@ def register(
             return await list_lab_nodes(await get_client(), lab_path, node_id)
 
     if enabled("add_lab_node"):
+
         @mcp.tool(name="add_lab_node")
         async def _add_lab_node(
             lab_path: str,
@@ -2073,6 +2036,7 @@ def register(
             )
 
     if enabled("delete_lab_node"):
+
         @mcp.tool(name="delete_lab_node")
         async def _delete_lab_node(
             lab_path: str, name: str = "", selection: str = "", confirm: bool = False
@@ -2093,6 +2057,7 @@ def register(
             return await delete_lab_node(await get_client(), lab_path, name, selection, confirm)
 
     if enabled("edit_lab_node"):
+
         @mcp.tool(name="edit_lab_node")
         async def _edit_lab_node(
             lab_path: str,
@@ -2213,6 +2178,7 @@ def register(
             )
 
     if enabled("change_node_delay"):
+
         @mcp.tool(name="change_node_delay")
         async def _change_node_delay(
             lab_path: str,
@@ -2277,6 +2243,7 @@ def register(
             )
 
     if enabled("edit_lab_nodes_by_template"):
+
         @mcp.tool(name="edit_lab_nodes_by_template")
         async def _edit_lab_nodes_by_template(
             lab_path: str,
@@ -2363,6 +2330,7 @@ def register(
             )
 
     if enabled("get_node_interfaces"):
+
         @mcp.tool(name="get_node_interfaces")
         async def _get_node_interfaces(lab_path: str, node_id: int) -> dict[str, Any]:
             """Get a node's ethernet/serial interfaces and what they're wired to.
@@ -2374,6 +2342,7 @@ def register(
             return await get_node_interfaces(await get_client(), lab_path, node_id)
 
     if enabled("connect_interface"):
+
         @mcp.tool(name="connect_interface")
         async def _connect_interface(
             lab_path: str,
@@ -2467,6 +2436,7 @@ def register(
             )
 
     if enabled("start_node"):
+
         @mcp.tool(name="start_node")
         async def _start_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Start one node, or every node in the lab if `node_id` is omitted.
@@ -2486,6 +2456,7 @@ def register(
             return await start_node(await get_client(), lab_path, node_id)
 
     if enabled("stop_node"):
+
         @mcp.tool(name="stop_node")
         async def _stop_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Stop one node, or every node in the lab if `node_id` is omitted.
@@ -2501,6 +2472,7 @@ def register(
             return await stop_node(await get_client(), lab_path, node_id)
 
     if enabled("wipe_node"):
+
         @mcp.tool(name="wipe_node")
         async def _wipe_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Wipe one node (or all nodes), deleting saved config/VLANs so it rebuilds from image.
@@ -2512,6 +2484,7 @@ def register(
             return await wipe_node(await get_client(), lab_path, node_id)
 
     if enabled("export_node"):
+
         @mcp.tool(name="export_node")
         async def _export_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Export one node's (or all nodes') running config into the saved lab file.
