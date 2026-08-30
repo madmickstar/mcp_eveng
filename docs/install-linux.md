@@ -5,6 +5,14 @@ Linux and macOS. See the [main README](../README.md) for what this
 project does, the full tool list, configuration variables, and the
 delete-confirmation flow — this doc only covers OS-specific setup.
 
+## Contents
+
+- [Install](#install)
+- [Running](#running)
+- [Using it with Claude Desktop / Claude Code (stdio)](#using-it-with-claude-desktop--claude-code-stdio)
+- [Using it with Claude Desktop / Claude Code (streamable-http)](#using-it-with-claude-desktop--claude-code-streamable-http)
+- [Running as a systemd service (Linux)](#running-as-a-systemd-service-linux)
+
 ## Install
 
 This project is **not published on PyPI** — install directly from a git
@@ -237,7 +245,14 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# read-only, not "true" -- "true" makes /home (including any SSH private
+# key you might store under it, e.g. for the capture-relay feature --
+# see docs/capture-relay.md) completely INVISIBLE to this service
+# regardless of file permissions, not just permission-checked. Confirmed
+# live: this was a real bug, producing a misleading "Permission denied"
+# that looked like a file-ownership problem but wasn't. read-only still
+# blocks this service from writing anywhere under /home.
+ProtectHome=read-only
 ReadWritePaths=/opt/mcp_eveng
 
 [Install]

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-eveng"
-version = "0.2.1"
+version = "0.3.17"
 description = "Model Context Protocol (MCP) server for automating EVENG network emulator labs"
 readme = "README.md"
 license = { text = "MIT" }
@@ -44,6 +44,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+capture-relay = [
+    "asyncssh>=2.14,<3.0",
+    "starlette>=0.30",
+    "uvicorn>=0.30",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -53,6 +58,9 @@ dev = [
     "mypy>=1.13",
     "build>=1.2",
     "twine>=6.0",
+    "asyncssh>=2.14,<3.0",
+    "starlette>=0.30",
+    "uvicorn>=0.30",
 ]
 
 [project.urls]
@@ -63,6 +71,7 @@ Changelog = "https://github.com/madmickstar/mcp_eveng/blob/main/CHANGELOG.md"
 
 [project.scripts]
 mcp-eveng = "mcp_eveng.__main__:main"
+mcp-eveng-capture-relay = "mcp_eveng.capture_relay.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_eveng"]

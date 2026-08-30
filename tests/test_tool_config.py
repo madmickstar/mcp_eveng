@@ -133,12 +133,13 @@ def test_tools_env_comm_example_has_full_parity_with_pro_except_three_tools() ->
     assert differing == {"export_node", "share_lab", "set_link_quality"}
 
 
-def test_tools_env_comm_example_disables_exactly_ten_tools() -> None:
+def test_tools_env_comm_example_disables_exactly_twelve_tools() -> None:
     # End-to-end functional check via make_enabled_predicate (what
     # actually gets registered), not just individual assertions: exactly
     # the six user-management tools plus
-    # export_node/share_lab/set_link_quality/delete_lab should be
-    # unavailable on Community; everything else should be enabled.
+    # export_node/share_lab/set_link_quality/delete_lab/list_captures/
+    # get_capture should be unavailable on Community; everything else
+    # should be enabled.
     status = load_tool_status(_REPO_ROOT / "tools.env.comm.example")
     enabled = make_enabled_predicate(status)
 
@@ -152,10 +153,11 @@ def test_tools_env_comm_example_disables_exactly_ten_tools() -> None:
         "list_lab_nodes", "add_lab_node", "delete_lab_node", "edit_lab_node",
         "change_node_delay", "edit_lab_nodes_by_template", "get_node_interfaces",
         "connect_interface", "start_node", "stop_node", "wipe_node", "export_node",
-        "set_link_quality", "telnet_node",
+        "set_link_quality", "telnet_node", "list_captures", "get_capture",
     ]
     disabled_tools = {t for t in all_tools if not enabled(t)}
     assert disabled_tools == {
         "list_users", "get_user", "add_user", "edit_user", "delete_user", "list_user_roles",
         "share_lab", "export_node", "set_link_quality", "delete_lab",
+        "list_captures", "get_capture",
     }

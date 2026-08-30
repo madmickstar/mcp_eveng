@@ -7,7 +7,482 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-08-30
+
+**Capture-relay feature branch (`feature/capture-relay`), merged to
+`master` after a full round of live testing -- every major path
+confirmed working end-to-end:** stopping the relay mid-stream
+(cleanly breaks the stream rather than hanging/orphaning the remote
+process), adding/deleting link-quality settings on both source and
+destination interfaces, curl-based streaming on PRO, plink-based
+streaming on PRO (the fallback path), and plink-based streaming on
+Community. Developed across many small, individually-tested commits
+(see the full history in `feature/capture-relay` if useful) rather
+than as one large, unverified change -- summarized below by area
+rather than repeating every individual commit message.
+
 ### Fixed
+- **`docs/capture-relay.md` had no instructions at all for running the
+  relay anywhere except via systemd, which is Linux-only** -- a real
+  gap surfaced by a genuine Windows test setup, not a hypothetical.
+  Confirmed live that `python -m mcp_eveng.capture_relay` (or the
+  installed `mcp-eveng-capture-relay` console script) works exactly
+  like running the main process interactively
+  (`python -m mcp_eveng --http`) -- nothing in `uvicorn`/`asyncssh`/
+  Starlette is Linux-specific, only the systemd deployment steps are.
+  Added a new "Running the relay for manual/interactive testing (any
+  OS, including Windows)" section to step 5, including the easy-to-miss
+  detail that the `.env` read is whichever one sits in the current
+  working directory at the moment the command is run -- same
+  convention the main process already uses -- so testing both
+  processes on the same machine means running each from its own
+  separate directory, not the same one.
+- **Community-mode captures could fail with Wireshark reporting `File
+  type is neither a supported pcap nor pcapng format... magic =
+  0x6b63696d`, even though the underlying capture was fine.** Decoded
+  live: those four bytes are the literal ASCII text `mick` -- the
+  tester's own Windows username -- meaning something was leaking
+  non-pcap text into the piped stream ahead of any real capture data.
+  Root cause: no plink call in the script used `-batch`, so plink was
+  free to prompt interactively for anything it couldn't resolve
+  non-interactively -- most likely an unconfirmed SSH host key on a
+  first-time connection (not suppressed by `-no-antispoof`, a
+  different, unrelated flag) -- and since the whole command's stdout is
+  piped straight into Wireshark expecting pure pcap/pcapng bytes,
+  prompt/banner text corrupts that stream instead of the command
+  failing cleanly. Added `-batch` to all four plink invocations (both
+  PRO-fallback and Community-mode, both the key-based default and the
+  commented-out password-based alternative) -- the correct behavior for
+  a piped, scripted invocation regardless of the exact root cause.
+  Also, per direct feedback: split the single shared
+  `COMMUNITY_SSH_USER`/`COMMUNITY_SSH_KEY` pair into separate
+  `PRO_SSH_USER`/`PRO_SSH_KEY` (this project's own dedicated
+  relay-fallback account) and `COMMUNITY_SSH_USER`/`COMMUNITY_SSH_KEY`
+  (whatever account the existing, separate Community setup uses) --
+  the script was silently assuming these were interchangeable, which
+  they aren't in general. Default `PLINK` path corrected to PuTTY's
+  actual default install location
+  (`C:\Program Files\PuTTY\plink.exe`, was a placeholder). Confirmed
+  (per direct feedback, no fix needed): the curl preflight's ~10s
+  discard window (see the widened-timeout fix above) is an accepted,
+  deliberate tradeoff, not a bug to chase further.
+- **Stopping the relay (`systemctl stop mcp-relay.service`) while a
+  capture was streaming would hang, then eventually SIGKILL the whole
+  process, orphaning the remote `dumpcap` process on the EVE-NG host --
+  confirmed against uvicorn's own source, not assumed.** uvicorn's
+  `timeout_graceful_shutdown` defaults to `None`, and `asyncio.wait_for(
+  ..., timeout=None)` waits forever -- the code path that cancels
+  remaining in-flight requests is never reached at all. Since a capture
+  stream is designed to never finish on its own (that's the whole
+  point), `systemctl stop` would hang until systemd's own, much longer
+  default `TimeoutStopSec` (90s) gave up and SIGKILLed the process --
+  bypassing Python's own cleanup entirely (the `async with` chain in
+  `streaming_process` that closes the SSH channel, which is what
+  actually terminates the remote process; also confirmed directly
+  against `asyncssh`'s own source: closing the process context manager
+  closes the channel, which is exactly what's needed). Fixed by setting
+  `timeout_graceful_shutdown=5` explicitly in `__main__.py`'s
+  `uvicorn.run()` call, so uvicorn cancels any still-running stream
+  itself after 5 seconds -- Python's normal task-cancellation-through-
+  `async with` semantics then run that same cleanup chain correctly.
+  Added `TimeoutStopSec=20` to the relay's systemd unit in
+  `docs/capture-relay.md` as a safety net on top of that (comfortably
+  longer than the 5s, so uvicorn's own graceful path is what normally
+  handles this, with SIGKILL only as a last resort if that somehow
+  doesn't complete in time). 2 new tests: one confirming
+  `_stream_capture`'s cleanup genuinely runs when its task is cancelled
+  (using a tracked fake context manager, not just asserted by
+  inspection), one confirming `main()` actually passes
+  `timeout_graceful_shutdown` through to `uvicorn.run` and not just
+  present somewhere in the file.
+- **The Community-mode `tcpdump` command was missing `sudo`, per direct
+  feedback: the real original Community `.bat` this was copied from
+  authenticates as root (no `sudo` needed for raw-capture privileges),
+  but this deployment's `mcp-eveng` account is deliberately non-root,
+  authenticating via the `capture_relay` group instead -- `sudo` is
+  required here even though it wasn't in the source this was copied
+  from.** Added `sudo` back to both the primary and password-based
+  Community `tcpdump` invocations in `scripts/eve-capture.bat`. Also
+  incorporated a third sudoers rule (confirmed from the user's own
+  deployed `/etc/sudoers.d/capture_relay`) into `docs/capture-relay.md`
+  step 3 for this command -- `%capture_relay ALL=(root) NOPASSWD:
+  /usr/bin/tcpdump -U -i * -s 0 -w -*` -- with a trailing `*` after
+  `-w -` specifically, per a sharp catch: sudoers matches a command
+  exactly unless its own spec ends in a wildcard, and the Community
+  `.bat` conditionally appends `not port 22` after `-w -` for the
+  `pnet0` interface case, which the two PRO sudoers rules never do (so
+  correctly have no trailing `*`, not an oversight). Split the sudoers
+  example into three separate, commented rules matching the real
+  deployed file's own structure, rather than one dense comma-joined
+  line.
+- **The `.bat`'s plink invocations never actually pointed at a private
+  key -- `plink` has no equivalent to `ssh`'s automatic key discovery,
+  and this project's own key-based auth setup (`docs/capture-relay.md`
+  step 2) was silently unusable through either plink call as a result.**
+  Added `-i "%COMMUNITY_SSH_KEY%"` to both the PRO-fallback and
+  Community-mode plink commands, plus a `COMMUNITY_SSH_KEY` variable
+  to configure, and a commented-out `-pw`-based alternative at each
+  call (matching the original Community `.bat`'s own approach) for
+  anyone who'd rather use password auth instead.
+- **Replaced the reconstructed Community-mode command block with the
+  real, working one, copied directly from an existing Community `.bat`
+  rather than guessed from a prose description.** Confirmed real
+  differences from the earlier reconstruction: no `sudo` at all
+  (Community's SSH account apparently doesn't need it for this, unlike
+  this project's own dedicated relay-fallback account, which still
+  does); `tcpdump -U -s 0` (unbuffered output -- important for a live
+  stream, not a completed capture -- and snaplen 0, capturing the full
+  packet); and a `not port 22` filter applied specifically when the
+  interface is exactly `pnet0` (excluding the SSH session's own
+  traffic from a capture on an interface that happens to carry it too).
+- **Widened the curl preflight's timeout window (`--connect-timeout`
+  3s->5s, `--max-time` 5s->10s) after live evidence it was too tight
+  for a genuinely-working relay.** Observed live: a preflight timeout
+  at ~3004ms immediately followed by Wireshark receiving a real,
+  successful capture moments later via the separate, unbounded
+  streaming call -- meaning the relay's actual round-trip (SSH connect
+  + sudo + `docker exec` + `dumpcap` startup) legitimately took longer
+  than the old window without anything being broken. This is also the
+  first confirmed case of a real capture reaching Wireshark
+  successfully end-to-end, though which code path actually delivered
+  it (the real curl stream, vs. the plink fallback) isn't fully
+  confirmed -- plink's missing `-i` flag (see above) makes a
+  successful fallback in that same run less likely than the real
+  stream having worked despite the tight preflight, but this isn't
+  certain either way.
+- **The relay crashed with `asyncssh.misc.ProtocolError: 'utf-8' codec
+  can't decode byte ... invalid continuation byte` the moment a real
+  capture actually reached it.** Confirmed live, with a full stack
+  trace: `asyncssh.create_process()` defaults to UTF-8 text mode
+  (verified directly against the installed library's own docstring,
+  not assumed) unless told otherwise, but `dumpcap`'s output (`-w -`)
+  is raw binary pcap/pcapng, not text at all -- asyncssh tried to
+  decode the first non-UTF-8 byte of genuine capture data and failed
+  immediately. Fixed with `encoding=None` on `create_process` in
+  `streaming_process` (`ssh_client.py`) -- asyncssh's own documented
+  way to request raw bytes. `run_command` (used only for `docker ps`,
+  genuinely textual output) was correctly left in text mode; this fix
+  is specific to the binary streaming path. This is exactly the kind
+  of bug `ssh_client.py`'s own "thin enough to be correct by
+  inspection, but genuinely unverified" caveat was hedging against --
+  and it was wrong at least this once. Added 2 new tests mocking
+  `asyncssh.connect`/`create_process` directly to assert the actual
+  arguments reaching asyncssh (`encoding=None` present,
+  `_connect_kwargs` passed through correctly) -- this class of bug
+  (wrong arguments passed to the SSH library) turns out to be testable
+  without a live server after all, even though the SSH round-trip
+  itself still isn't; updated `ssh_client.py`'s and this doc's status
+  notes accordingly rather than leaving the old blanket "not
+  unit-tested" claim in place now that it's no longer fully accurate.
+- **The `.bat`'s curl preflight could treat a genuine connection
+  failure as success.** Confirmed live: `curl: (28) Connection timed
+  out` (the relay wasn't reachable at all) was indistinguishable, by
+  exit code alone, from "connected fine, was streaming, got cut off by
+  our own `--max-time` before the indefinite body ever finishes" --
+  both produce curl exit code `28`. The previous preflight design
+  (introduced to fix the separate curl-exit-code-through-a-pipe issue)
+  treated any `28` as success, so a real connection failure launched
+  Wireshark anyway with nothing to actually show. Fixed by checking the
+  *actual response headers* instead of inferring from the exit code:
+  `--connect-timeout` now bounds just the TCP handshake, separately
+  from the overall `--max-time`; headers (if any were received at all)
+  are dumped to a temp file and checked afterward with `findstr` for a
+  genuine `200` status line, which is present only if the relay
+  actually accepted the token and started responding, regardless of
+  which timeout curl's own exit code happens to reflect. Also updated
+  the `.bat`'s and `docs/capture-relay.md`'s status notes to reflect
+  what this same live test actually confirmed working: the new
+  path-segment URL format parses correctly all the way through to
+  reaching curl (the previous two bugs are resolved) -- the streaming
+  path itself, the plink fallback, and Community mode remain
+  unexercised live. Added a troubleshooting entry to "Known
+  limitations" for relay-unreachable symptoms (service not running,
+  advertised vs. listen address mismatch between the two separate
+  `.env` files, firewall) as a first checklist before assuming a script
+  bug, since that's what this specific live test turned out to be.
+- **A second, distinct `capture://` URL parsing bug found live even
+  after switching the query separator from `&` to `;` -- the argument
+  came through truncated right after the first field name (`?token`,
+  nothing after it, not even `=`).** Exact mechanism unconfirmed --
+  somewhere between the browser's handling of a non-standard scheme
+  and Windows' own URL dispatch, outside what this project can
+  directly instrument or verify without a live Windows/browser
+  environment. Rather than find one more special character to work
+  around, redesigned the URL format entirely: no query string at all,
+  just plain `/`-separated path segments --
+  `capture://<relay-host>/<container>/<token>/<relay-port>/<eveng-host>`.
+  Every field is guaranteed free of `/` itself (container names are
+  docker-safe, `token` is base64url -- no `/` in that alphabet,
+  `eveng_host` is an IP/hostname, `relay_port` is numeric), so there's
+  no separator ambiguity left for any layer to mishandle. `url.py`'s
+  `build_pro_capture_url`/`parse_pro_capture_url` rewritten
+  accordingly; `is_community_style_path` unchanged in spirit (still
+  checks the first path segment against `vunl*`/`pnet*`) but now
+  operates on one segment among several rather than the whole query-less
+  path. 17 tests in `test_url.py` rewritten/added, including one
+  asserting the URL contains none of `?`, `&`, `;`, or `=` at all.
+  The relay's own HTTP endpoint contract (`GET /capture/stream?token=`)
+  is unaffected -- that's a separate HTTP request curl constructs
+  directly, was never at risk from this issue (only one query field, so
+  `&` never came up there), and needed no changes.
+- **Fixed the curl-exit-code-through-a-pipe issue flagged (and
+  deliberately deferred) during a prior code review.** `%ERRORLEVEL%`
+  after `curl | wireshark` reflects Wireshark's own exit code, not
+  curl's -- `cmd.exe` has no equivalent to a shell's
+  `pipefail`/`PIPESTATUS` for seeing an earlier pipeline stage's exit
+  code. Without addressing this, a curl failure (bad token, relay
+  unreachable) piped straight into Wireshark could go unnoticed if
+  Wireshark itself still exits `0` after being closed normally with
+  nothing to show. Fixed with a short, separate preflight request
+  before committing to the real (indefinite) stream: `--max-time 3`
+  cuts it off regardless of outcome (a successful stream never
+  completes on its own), `--fail` makes an actual HTTP error (rejected
+  token) fail fast with a distinct code, and curl's own exit code `28`
+  (operation timeout) is treated as the *success* signal specifically,
+  since it means headers were received and streaming had already
+  started when the preflight's short clock ran out. Restructured this
+  section of the `.bat` to use flag variables rather than
+  `goto`/labels inside a parenthesized `if` block -- a well-known
+  `cmd.exe` fragility trap (jumping into or out of a block that's
+  already been tokenized as one unit can behave unpredictably) that an
+  earlier draft of this same fix had introduced.
+- **`list_captures`/`get_capture` confirmed working live.** The earlier
+  `docker ps`/`docker exec` sudo and `ProtectHome` fixes, plus the
+  restored group-based sudoers, are all confirmed live rather than
+  just reasoned through -- `list_captures` now returns real results
+  against a live EVE-NG PRO server.
+- **The `.bat` companion's `mode=pro` query field broke live, and its
+  root cause led to redesigning the whole detection scheme rather than
+  patching the symptom.** Confirmed live: the query string ended up
+  with `mode` parsed as an empty string despite `get_capture` always
+  including `mode=pro` in the URL it builds. Root cause: `&` (used as
+  the query-field separator, matching ordinary HTTP convention) is a
+  command separator in `cmd.exe`, which is *always* the interpreter
+  for a `.bat` file however it's invoked -- an unescaped `&` in the
+  argument corrupts everything after it, and Community's own links had
+  never hit this before since they never carried a query string at
+  all; this project's own multi-field query string was the first
+  `capture://` link ever built with `&` in it. Per direct feedback
+  (confirmed live: Community's own device names always start `vunl` or
+  `pnet`, a second shape beyond the single example seen earlier),
+  redesigned mode detection to use the URL's own path pattern instead
+  of an invented `mode=` field at all -- `vunl*`/`pnet*` in the path
+  position means Community's existing, unmodified flow; anything else
+  (this project's own `Capture-<pid>`-style container names) means the
+  relay flow. Also switched the query separator itself from `&` to `;`
+  (not one of `cmd.exe`'s special characters: `& | < > ^ ( ) % !`) for
+  the fields that remain (`token`/`relay_port`/`eveng_host`). New
+  `is_community_style_path()` in `url.py` for the path-pattern check;
+  `urllib.parse.urlencode` has no option to change its separator from
+  `&`, so the query string is now built by hand, and parsed back with
+  `parse_qs`'s own `separator=` parameter (a real, standard-library
+  option, not project-specific) to match. `.bat` rewritten to match:
+  substring-prefix check instead of query parsing for mode detection,
+  `;`-based query splitting for the remaining fields, and `pause` added
+  on every error path so the window stays open to read the message
+  (matching debugging pauses added by hand during live testing) rather
+  than flashing closed immediately, which is how the original bug was
+  even readable enough to report in the first place. 14 tests in
+  `test_url.py` rewritten/added for the new scheme (path-pattern
+  matching for both `vunl*` and `pnet*`, confirming `;` not `&` appears
+  in the built URL, confirming no `mode=` field exists at all); full
+  suite re-run afterwards with zero regressions. The curl-relay path,
+  its plink fallback, and the Community-mode command block itself
+  (still a reconstruction, not copied from a real file) remain
+  unverified live -- see the updated status note at the top of
+  `docs/capture-relay.md`.
+- **Restored group-based sudoers on the EVE-NG host, per direct
+  feedback that this got lost in an earlier consolidation.** The
+  v0.3.3-v0.3.5 sequence collapsed a two-account design down to a
+  single `mcp-eveng` account for simplicity, but along the way also
+  flattened the EVE-NG-host sudoers rule from group-based
+  (`%capture_relay`) to username-based (`mcp-eveng` directly) --
+  losing the ability to add another account to the same rights later
+  without editing sudoers again, which was the specific reason for a
+  group in the first place. Restored: `docs/capture-relay.md` step 1
+  now creates both the `mcp-eveng` account AND a `capture_relay` group
+  (with `mcp-eveng` as its first member), and step 3's sudoers rule
+  targets `%capture_relay`, not `mcp-eveng`. This is scoped narrowly to
+  the EVE-NG-host side (role 2 in the doc's own terminology) -- the
+  *local* accounts running `mcp-eveng.service`/`mcp-relay.service`
+  (role 1) are unaffected and still both simply `mcp-eveng`/`mcp-eveng`,
+  per the same direct feedback that this part is exactly what was
+  wanted.
+- **Neither `docker_ps.DOCKER_PS_COMMAND` nor `server._dumpcap_command`
+  actually prefixed the command with `sudo`, despite the sudoers rules
+  this same project sets up in `docs/capture-relay.md` being written
+  for exactly that (`mcp-eveng ALL=(root) NOPASSWD: /usr/bin/docker
+  ps ..., /usr/bin/docker exec ...`).** Confirmed live: without `sudo`,
+  `docker ps` can't reach the daemon socket and exits non-zero, even
+  though the SSH account itself authenticates fine -- this project's
+  design deliberately uses scoped sudo rather than `docker` group
+  membership (broader, unscoped daemon access) for this account, so
+  the commands sent over SSH need to actually say `sudo`. Both
+  `list_captures` (via `DOCKER_PS_COMMAND`) and the relay's streaming
+  (via `_dumpcap_command`) were affected identically. Fixed by
+  prefixing both with `sudo`; 2 new regression tests confirm the
+  prefix directly rather than relying on it being implied by
+  surrounding assertions. Full suite re-run afterwards with zero
+  regressions.
+- **`ProtectHome=true` in both systemd units (`mcp-eveng.service` in
+  `docs/install-linux.md`, `mcp-relay.service` in
+  `docs/capture-relay.md`) makes `/home` completely invisible to the
+  service -- not permission-checked, hidden entirely -- which directly
+  contradicted this same project's own advice to store the
+  capture-relay SSH private key under `/home/mcp-eveng/.ssh/`.**
+  Confirmed live: this produced a `[Errno 13] Permission denied`
+  reading the key that looked exactly like a file-ownership problem
+  (and was reported, reasonably, as one) but wasn't -- verified
+  correct ownership/permissions on the key file made no difference,
+  and duplicating it under a different filename in the same directory
+  reproduced the identical error, which only makes sense if the whole
+  directory tree is inaccessible to the service rather than one
+  specific file being denied. Changed to `ProtectHome=read-only` in
+  both units, which still blocks the service from writing anywhere
+  under `/home` but permits reads. Added a forward-reference from
+  `docs/capture-relay.md`'s keypair-generation step to this fix, since
+  reading the doc in order means generating the key before reaching
+  the systemd section that would otherwise silently break reading it.
+- **Consolidated capture-relay from a dedicated `mcp-relay`/`capture_relay`
+  account+group back to reusing the same `mcp-eveng` account the main
+  process already runs as, per direct feedback that the multi-account
+  design was still overcomplicating setup.** `docs/capture-relay.md`
+  now explicitly names two different *roles* that name covers -- the
+  account systemd uses to run `mcp-eveng.service`/`mcp-relay.service`
+  locally (no shell/home directory required, since systemd execs the
+  process directly and never invokes a shell) vs. the account being
+  SSH'd into on the EVE-NG host (which does need a real shell and a
+  home directory, since `sshd` invokes the shell to run a command) --
+  these can be the literal same Unix account if colocated, or two
+  different accounts sharing a name if not, but either way the
+  distinction needed to be spelled out since conflating the two is an
+  easy way to get confused about which one's requirements apply where.
+  Sudoers rule simplified from a group-based rule to a direct
+  username-based one, since there's only the one account now.
+  Corrected a resulting bug in the docs: the systemd unit's
+  `ExecStart` for the relay must run the `mcp-eveng-capture-relay`
+  console script, not `mcp-eveng --http` -- both scripts get installed
+  into any venv the package is installed into regardless of which one
+  you meant to run there, so this is an easy mix-up, and running the
+  wrong one starts a second copy of the main tool server instead of
+  the actual relay. Clarified the `pip install` pattern for a venv
+  belonging to a different (or unprivileged) account: `sudo -u
+  <account> /path/to/venv/bin/pip install ...` directly, rather than
+  `source .venv/bin/activate` -- activation doesn't reliably carry
+  through `sudo -u`. Also clarified there is only ONE source checkout
+  regardless of how many venvs/deployments run from it -- every `pip
+  install` (for either process) points at the same source path, just
+  into different venvs, and `[capture-relay]` needs installing into
+  BOTH separately since venvs share nothing with each other.
+- **`CAPTURE_SSH_HOST` now defaults to `${EVENG_HOST}`** in
+  `.env.example`, via `pydantic-settings`' variable-interpolation
+  support (confirmed working directly against the real file, not just
+  assumed) -- the docker host this SSHes to reach and the EVE-NG REST
+  API host are the same server in the overwhelming majority of setups,
+  so asking for a second, easily-out-of-sync IP was redundant. Still
+  overridable for the rare case where they genuinely differ.
+  `.env.capture-relay.example` has no `EVENG_HOST` of its own to
+  interpolate from (documented as such), so it keeps an explicit value
+  there.
+- **Added a Table of Contents to `docs/install-linux.md`,
+  `docs/install-windows.md`, and `docs/capture-relay.md`.**
+- **Added blank lines between every individual variable in both
+  `.env` example files** (previously only between section headers),
+  for easier scanning/editing.
+- **The `mcp-relay` service account's shell was set to
+  `/usr/sbin/nologin`, which blocks SSH from executing ANY command
+  through that account -- not just interactive sessions.** Confirmed
+  live: authenticating with the account's key still succeeds (auth and
+  shell-invocation are separate steps), but the account then fails
+  every actual command with `"This account is currently not
+  available"` -- OpenSSH's own message for a `nologin` shell, not a
+  permissions problem. This directly broke both `list_captures`'
+  `docker ps` and the relay's `docker exec` calls; the account is now
+  created with `--shell /bin/bash` (restricting what it can do is
+  sudo's job -- see the group-based sudoers rule -- not the shell's).
+  Also switched `--no-create-home` to `--create-home`, so the account's
+  home directory and `.ssh` folder exist automatically instead of
+  needing a manual `mkdir`/`chmod` step.
+  **Separately, the setup steps had the keypair generated in the wrong
+  place entirely:** `ssh-keygen` was run as the `mcp-relay` account
+  *on the EVE-NG host*, putting both halves of the keypair there --
+  but the private key needs to live wherever `mcp-eveng`/the relay
+  actually run (a different machine from the EVE-NG host in general;
+  confirmed a real gap against an actual test setup running the main
+  process on Windows while `CAPTURE_SSH_HOST` pointed at a separate
+  Linux box). Only the public half belongs on the EVE-NG host. Rewrote
+  `docs/capture-relay.md` steps 1-2 to clearly separate "done once, on
+  the EVE-NG host" (account/group creation) from "done per machine
+  actually running mcp-eveng/the relay" (keypair generation, for both
+  Linux and Windows), and added the missing step of appending the
+  public key to `mcp-relay`'s own `authorized_keys` on the EVE-NG host
+  -- this was never spelled out at all in the previous version of this
+  doc. Corrected `.env.example`/`.env.capture-relay.example`'s
+  `CAPTURE_SSH_KEY_PATH` example and comments to match (a local path on
+  whichever machine that process runs on, not `/home/mcp-relay/...`
+  which only makes sense on the EVE-NG host itself) and corrected an
+  overclaim in this same `[Unreleased]` section's own prior entry below
+  (`_KEY_PATH` isn't necessarily identical between the two `.env`
+  files, only `_HOST`/`_PORT`/`_USERNAME` are). All references to step
+  numbers elsewhere in the doc/env files updated for the doc going from
+  6 steps to 7.
+- **Simplified capture-relay's SSH account model from two dedicated
+  accounts to one, with sudo access granted by group rather than by
+  username.** The original design used two separately-scoped accounts
+  (`mcp-eveng-capture-list` for read-only `docker ps`,
+  `mcp-eveng-capture-relay` for `docker exec ... dumpcap`) on the theory
+  that each process should only ever hold the privilege it actually
+  uses. In practice this added setup complexity (two accounts, two
+  keypairs, two sudoers lines) without a correspondingly large security
+  benefit, since both accounts still only ever reach the same two
+  fixed, narrow docker subcommand shapes -- there was no meaningfully
+  different blast radius between them. Replaced with a single account
+  (`mcp-relay`) and a single group (`capture_relay`); the sudoers rule
+  grants both commands to `%capture_relay` rather than to individual
+  usernames, so `list_captures`/`get_capture` (in the main `mcp-eveng`
+  process) and the relay now authenticate identically -- adding another
+  process or account that needs the same rights later is just adding it
+  to the group, not editing sudoers again. `docs/capture-relay.md`
+  steps 1-2 and the systemd unit's `User=`/`Group=` fields rewritten
+  accordingly; `.env.example` and `.env.capture-relay.example` now show
+  identical `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` values (previously
+  deliberately different, per account) -- `_KEY_PATH` was also wrongly
+  shown as identical in this entry's first version; see the next
+  `### Fixed` entry above for the correction.
+- **Replaced the real EVE-NG PRO server IP address (`172.16.130.14`,
+  leaked into the capture-relay docs/env-examples from earlier live
+  testing sessions) with `192.168.1.50`** -- the same placeholder
+  `install-linux.md` already uses for its own `EVENG_HOST` example, for
+  consistency across the project's docs rather than each doc inventing
+  its own example IP.
+- **`import asyncssh` at `ssh_client.py`'s module top level meant the
+  entire `mcp-eveng` server crashed at startup for anyone without the
+  optional `capture-relay` extra installed -- not just people using
+  `list_captures`/`get_capture`.** Confirmed live during initial testing
+  of the capture-relay feature (introduced earlier in this same
+  `[Unreleased]` section -- see the `### Added` entry below): `server.py`
+  unconditionally imports every tools module including `capture`
+  regardless of whether its tools are even enabled, and `capture.py`
+  imports `ssh_client.py`, which did `import asyncssh` at the top of the
+  file. A plain `pip install -e .` (the documented base install --
+  `capture-relay` is an opt-in extra) meant `asyncssh` genuinely wasn't
+  present, and the whole server failed with a `ModuleNotFoundError`
+  traceback before any tool, enabled or not, could even be considered.
+  Fixed by moving the `import asyncssh` into `run_command`/
+  `streaming_process` themselves (lazy import) -- the module, and by
+  extension the whole server, now imports fine without it; only actually
+  *calling* `list_captures`/`get_capture` needs it installed. Added a new
+  `ssh_client.is_available()` check, called by both tools before any SSH
+  work, so a genuinely missing dependency now gives a clear, actionable
+  error message instead of a raw traceback. Verified: reproduced the
+  exact failure in a fresh venv with the base install only (confirmed
+  `asyncssh` absent, confirmed `create_server()` and the literal
+  `python -m mcp_eveng --http` command both failed before the fix and
+  succeed after), then added 2 new tests using `sys.modules` manipulation
+  to simulate `asyncssh` genuinely missing (one for `server.py`'s own
+  import chain, one for `ssh_client.py` directly) plus 3 new tests for
+  the friendly-error-message behavior in `tools/capture.py`. Full suite
+  re-run afterwards with zero regressions.
 - **`set_link_quality` no longer requires the far side's current
   quality values to be supplied explicitly.** Previously, changing
   quality on one side of a node-to-node connection required
@@ -82,7 +557,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode, and confirming the search path genuinely cannot reach this case
   at all.
 
+### Documentation
+- **Split the confusing single `.env` story for capture-relay into two
+  clearly separate example files** -- `.env.example` (main `mcp-eveng`
+  process) now includes its own `CAPTURE_*` section for
+  `list_captures`/`get_capture`, and a new `.env.capture-relay.example`
+  covers the standalone relay's own, separate `.env`. Previously
+  `docs/capture-relay.md` showed both processes' variables mixed into
+  one code block with prose explaining the split after the fact --
+  confirmed confusing in practice. Both files now cross-reference each
+  other and are heavily commented on which variables are shared by
+  name but need different *values* (`CAPTURE_SSH_*`, pointed at two
+  different, separately-scoped SSH accounts; `CAPTURE_TOKEN_SECRET`,
+  which must be identical) versus which look similar but aren't
+  (`CAPTURE_RELAY_LISTEN_*`, the relay's bind address, vs.
+  `CAPTURE_RELAY_ADVERTISE_*`, read only by the main process to build
+  `capture://` URLs) versus which belong to only one file at all
+  (`EVENG_*`/`MCP_*` never belong in the relay's `.env`;
+  `CAPTURE_TOKEN_TTL_SECONDS`/`CAPTURE_SSH_TIMEOUT_SECONDS` are read
+  only by `list_captures`/`get_capture`, never by the relay, even
+  though nothing stops them being set there).
+
 ### Added
+- **`list_captures`/`get_capture`: new PRO/Corporate-only tools, plus a
+  standalone `mcp-eveng-capture-relay` systemd service and a Windows
+  `.bat` companion, for streaming an EVE-NG PRO Wireshark capture to a
+  local Wireshark without a personal SSH+sudo account on the EVE-NG
+  host.** Confirmed live that capturing can't be automated end-to-end --
+  each capture container's lifetime is tied to a heartbeat from the
+  browser tab that started it (refreshing the page kills captures off
+  one by one, on each one's own staggered idle timer, not all at once),
+  so the person still starts captures from the GUI same as today. Also
+  confirmed live that a container's name (`Capture-nnnnnnn`) is PID-like,
+  not derived from node id or interface, so there's no automatic
+  node/interface -> container correlation -- `list_captures` shows
+  what's running (container, age, status, oldest-first) for a person to
+  recognize by when they started it, and `get_capture` mints a one-time
+  `capture://` URL from a position in that list (or an exact container
+  name/id).
+  New `capture_relay` package: `tokens.py` (self-contained, HMAC-signed
+  tokens -- the main process and the relay run as fully independent
+  systemd services with no shared runtime state, so a token has to be
+  verifiable without either process calling the other or consulting
+  shared storage), `docker_ps.py` (parses a machine-readable `docker ps
+  --format` request rather than the human table, filtered by
+  `ancestor=eve-wireshark`), `config.py` (SSH identity shared by both
+  processes; separate listen vs. advertise address for the relay, since
+  a bind address like `0.0.0.0` is meaningless as something a client
+  connects *to*), `ssh_client.py` (thin `asyncssh` wrapper), `url.py`
+  (builds/parses the `mode=pro` `capture://` URL -- deliberately
+  distinct from Community's own unmodified `capture://` link shape,
+  which carries no `mode` at all and needs no MCP involvement), and
+  `server.py` (the relay itself -- Starlette, already a transitive
+  dependency via `mcp[cli]`'s own `--http` transport, so no new
+  framework). New `asyncssh`/`starlette`/`uvicorn` optional dependencies
+  (`capture-relay` extra), new `mcp-eveng-capture-relay` console script.
+  New `docs/capture-relay.md` (SSH/sudoers setup for two
+  separately-scoped service accounts, the systemd unit, every env var)
+  and `scripts/eve-capture.bat` (the Windows companion registered
+  against `capture://`, dispatching Community's existing behavior
+  unmodified vs. this project's new curl-relay-primary/plink-fallback
+  PRO path).
+  **Status: 59 new tests, all passing (tokens, docker ps parsing, config,
+  URL building, the relay's token/streaming/disconnect logic against a
+  fake SSH process, and the MCP tools against a fake SSH runner) -- but
+  the actual `asyncssh` connections and the `.bat` file itself are
+  unverified against any live EVE-NG server or Windows machine.**
+  Developed on its own branch (`feature/capture-relay`); shipped
+  disabled by default in both `tools.env.*.example` files even on PRO,
+  since it depends on infrastructure (the SSH accounts, the relay
+  service) that doesn't exist until deliberately set up.
 - **`set_link_quality`: new PRO/Corporate-only tool for per-connection
   link quality (delay/jitter/packet loss/bandwidth), set independently on
   each side of a connection.** No Community equivalent exists at all
@@ -116,8 +660,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the unmodified project).
 
 ### Documentation
-- **Corrected false PyPI-install framing in the README and Linux/Windows
-  install guides** -- this project is not published on PyPI, but
+- **README**: added a doc link and PRO/Community bullet for the new
+  capture-relay feature (see the `### Added` entry above); also fixed
+  two things noticed stale while in there -- the "Three tools genuinely
+  behave differently by edition" count (already wrong before this
+  session; four were listed, now five with capture-relay added) and
+  `set_link_quality`'s own bullet, which still described the "far side
+  values must be supplied explicitly" limitation that was actually
+  fixed earlier in this same `[Unreleased]` section (see the `### Fixed`
+  entry above) but never reflected in the README's own description.
+- Corrected false PyPI-install framing in the README and Linux/Windows
+  install guides -- this project is not published on PyPI, but
   `docs/install-linux.md`'s "Install" section (and the main README's)
   presented `pip install mcp-eveng` as the primary/first install method,
   which doesn't currently work at all. Both now lead with the actual
