@@ -1,3 +1,5 @@
+![mcp-eveng](assets/banner.png)
+
 # mcp-eveng
 
 [![CI](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml/badge.svg)](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml)
