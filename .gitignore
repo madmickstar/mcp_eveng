@@ -32,3 +32,7 @@ htmlcov/
 
 # uv
 uv.lock
+
+# Session handoff notes (local working memory between chat sessions,
+# not a versioned project artifact -- update it locally, don't commit it)
+HANDOFF.md
