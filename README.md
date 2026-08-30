@@ -1,4 +1,10 @@
+![mcp-eveng](assets/banner.png)
+
 # mcp-eveng
+
+[![CI](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml/badge.svg)](https://github.com/madmickstar/mcp_eveng/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that lets LLM
 clients (Claude Desktop, Claude Code, or any other MCP host) drive an
@@ -10,6 +16,7 @@ folders and users — all through the EVENG REST API.
 
 - [Features](#features)
 - [Installation](#installation)
+- [Capture relay](#capture-relay)
 - [Choosing a transport](#choosing-a-transport)
 - [A note on sessions and relogin](#a-note-on-sessions-and-relogin)
 - [PRO vs Community differences](#pro-vs-community-differences)
@@ -32,26 +39,12 @@ folders and users — all through the EVENG REST API.
 
 ## Features
 
-- Full coverage of the documented EVENG REST API: auth, system status, node
-  templates, network types, folders, users, labs, lab networks, lab nodes
-  (including start/stop/wipe/export), topology, links and pictures. Plus
-  one PRO/Corporate-only, undocumented endpoint reverse-engineered from a
-  live capture: per-connection link quality (delay/jitter/packet loss/
-  bandwidth) — see `set_link_quality` and `tools/quality.py`.
-- Every destructive tool (delete folder/user/network/node/lab) goes through
-  a search -> select -> confirm flow before anything is deleted -- no
-  special MCP host capability required (Claude Desktop doesn't support MCP
-  elicitation, so this deliberately avoids depending on it).
-- All three MCP transports: `stdio` (default), `sse`, and `streamable-http`
-  (recommended for networked deployments), selected with a CLI flag.
-- DNS-rebinding Host-header protection and optional stateless streamable-http,
-  both configurable.
-- Async, typed, cookie-session-aware EVENG client with automatic re-login on
-  session expiry.
-- Configuration lives entirely in environment variables / a `.env` file —
-  nothing is hardcoded.
-- Ships as an installable, PyPI-packagable Python distribution with a full
-  unit test suite.
+- All three MCP transports: `stdio`, `--sse`, `--http`
+- Full coverage of the EVE-NG REST API
+- 46 tools
+- Stream Wireshark captures to a local Wireshark
+- Adjust link quality settings
+- Supports both Community and PRO editions
 
 ## Installation
 
@@ -64,23 +57,15 @@ cd mcp_eveng
 pip install -e .
 ```
 
-For local development and running it, OS-specific setup (virtual
-environment activation, path syntax, Claude Desktop JSON config) differs
-enough to warrant their own guides:
-
 - **[Linux / macOS install & running guide](docs/install-linux.md)**
 - **[Windows install & running guide](docs/install-windows.md)**
 
-Both cover cloning and installing, choosing a transport (`stdio` /
-`--sse` / `--http`), and the exact Claude Desktop / Claude Code JSON
-configuration for stdio and streamable-http.
+## Capture relay
 
-PRO/Corporate only, and a substantially bigger setup than anything
-else in this project: **[Capture relay guide](docs/capture-relay.md)**
--- streams an EVE-NG PRO Wireshark capture to a local Wireshark without
-a personal SSH+sudo account on the EVE-NG host. Implemented and
-unit-tested but not yet verified against a live server -- see the
-guide's status note before relying on it.
+PRO/Corporate only. Streams an EVE-NG PRO Wireshark capture to a local
+Wireshark without a personal SSH+sudo account on the EVE-NG host.
+
+**[Capture relay guide](docs/capture-relay.md)**
 
 ## Choosing a transport
 
@@ -100,40 +85,9 @@ exact commands and Claude Desktop JSON configuration for each.
 
 ## A note on sessions and relogin
 
-EVE-NG only allows **one active session per user account** — confirmed
-against EVE-NG's own official documentation: "each user can login from a
-single location only. If the same user login twice, the second login
-disable the first one." If the account this server logs in as (via
-`EVENG_USERNAME`/`EVENG_PASSWORD`) is the same account used elsewhere at
-the same time — the EVE-NG GUI, a separate script, another instance of
-this server — whichever logs in most recently silently invalidates every
-other session, including this one.
-
-This is confirmed to actually happen, not just a documented possibility —
-traced via a timestamped EVE-NG server audit log (`api.txt`) showing a
-`stop` request failing with `400` in the exact same second as a second
-login to the same account. What that log also revealed: the invalidated
-session did **not** come back self-identifying as an auth problem — no
-`status: "unauthorized"` in the response body, just a bare `400` with a
-generic `"fail"` status and EVE-NG's generic `"Request not valid"`
-message, indistinguishable at the JSON level from any other validation
-failure. An earlier version of this project's relogin check looked for
-the documented `status: "unauthorized"` marker and missed this exact case
-because of that gap between documented and observed behavior.
-
-`EvengClient` now retries once, transparently, on **any** `400` or `401`
-response — trusting the HTTP status code alone, not the response body.
-The trade-off, accepted deliberately: a genuine validation failure
-unrelated to auth (e.g. an invalid template name) also gets one wasted
-relogin-retry under this broader check, since relogging in obviously
-doesn't fix bad parameters — but it reproduces the identical final error
-either way, just with one extra round-trip. That's a better trade than
-silently missing real session invalidation, which is now confirmed to
-happen in exactly the shared-account workflow described above.
-
-If you're troubleshooting something similar, using a separate, dedicated
-account for this server (rather than sharing your own login) rules this
-class of issue out entirely.
+EVE-NG only allows one active session per user account — see
+[docs/tools-reference.md](docs/tools-reference.md#sessions-and-relogin)
+for what that means in practice and how `EvengClient` handles it.
 
 ## PRO vs Community differences
 
@@ -196,9 +150,7 @@ live testing, or both:
   account on the EVE-NG host — PRO/Corporate only, no Community
   equivalent needed, and disabled by default even on PRO until the
   supporting infrastructure is set up. See
-  [docs/capture-relay.md](docs/capture-relay.md) for the full
-  architecture and setup — and its status note, since this hasn't been
-  verified against a live server yet.
+  [docs/capture-relay.md](docs/capture-relay.md) for setup.
 
 The six user-management tools (`list_users`, `get_user`, `add_user`,
 `edit_user`, `delete_user`, `list_user_roles`) are **not** edition-gated —
@@ -363,7 +315,10 @@ connect more than one server with overlapping names to the same client.
 | | `stop_node` | Stops a node, or every node in a lab. |
 | | `wipe_node` | Wipes a node's saved configuration. |
 | | `export_node` | Exports a node's running configuration. |
+| | `set_link_quality` | Sets per-connection delay/jitter/packet-loss/bandwidth. PRO only. |
 | Live console access | `telnet_node` | Sends CLI commands to a running node's console over telnet. |
+| Capture relay | `list_captures` | Lists running Wireshark capture containers. PRO only, disabled by default. |
+| | `get_capture` | Mints a one-time URL to stream a capture to a local Wireshark. PRO only, disabled by default. |
 
 "Disabled by default" tools: see "Controlling which tools are exposed"
 below for how to turn them on. "Requires user confirmation" tools: see

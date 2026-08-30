@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from typing import Any, AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -91,9 +92,7 @@ async def _stream_capture(
             if await request.is_disconnected():
                 return
             try:
-                chunk = await asyncio.wait_for(
-                    process.stdout.read(read_chunk_bytes), timeout=read_timeout_seconds
-                )
+                chunk = await asyncio.wait_for(process.stdout.read(read_chunk_bytes), timeout=read_timeout_seconds)
             except asyncio.TimeoutError:
                 continue
             if not chunk:
@@ -123,9 +122,7 @@ def create_relay_app(
         try:
             claim = verify_token(token, settings.token_secret.get_secret_value())
         except InvalidToken:
-            return JSONResponse(
-                {"status": "error", "message": "invalid or expired token"}, status_code=403
-            )
+            return JSONResponse({"status": "error", "message": "invalid or expired token"}, status_code=403)
 
         return StreamingResponse(
             _stream_capture(

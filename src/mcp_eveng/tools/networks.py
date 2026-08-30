@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -24,9 +25,7 @@ GetClient = Callable[[], Awaitable[EvengClient]]
 _CLOUD_ALIASES = {"cloud": "pnet0", **{f"cloud{i}": f"pnet{i}" for i in range(10)}}
 
 
-async def list_lab_networks(
-    client: EvengClient, lab_path: str, network_id: int | None = None
-) -> dict[str, Any]:
+async def list_lab_networks(client: EvengClient, lab_path: str, network_id: int | None = None) -> dict[str, Any]:
     """List all networks in a lab, or get a single network by id."""
     return await client.list_lab_networks(lab_path, network_id)
 
@@ -87,7 +86,7 @@ async def add_lab_network(
             "message": (
                 f"{len(type_names)} network type(s) available:\n{format_numbered(type_names)}\n\n"
                 "Call add_lab_network again with `network_type` set to the exact name, "
-                "its number from this list, or \"cloud\"/\"cloud0\"-\"cloud9\" (resolved to "
+                'its number from this list, or "cloud"/"cloud0"-"cloud9" (resolved to '
                 "pnet0-pnet9 -- what the GUI calls Cloud0-Cloud9)."
             ),
             "data": {"types": type_names},
@@ -120,7 +119,6 @@ async def add_lab_network(
     if hideme is not None:
         kwargs["hideme"] = hideme
     return await client.add_lab_network(lab_path, resolved_network_type, **kwargs)
-
 
 
 async def edit_lab_network(
@@ -169,7 +167,10 @@ async def edit_lab_network(
 
 
 def _network_id(network: dict[str, Any]) -> int:
-    return int(network.get("id", network.get("_key")))
+    raw_id = network.get("id", network.get("_key"))
+    if raw_id is None:
+        raise ValueError(f"network record has neither 'id' nor '_key': {network!r}")
+    return int(raw_id)
 
 
 def _network_name(network: dict[str, Any]) -> str:
@@ -180,9 +181,7 @@ def _network_label(network: dict[str, Any]) -> str:
     return f"{_network_name(network)} (id {network.get('id', network.get('_key', '?'))})"
 
 
-async def _find_networks_by_name(
-    client: EvengClient, lab_path: str, name: str
-) -> list[dict[str, Any]]:
+async def _find_networks_by_name(client: EvengClient, lab_path: str, name: str) -> list[dict[str, Any]]:
     result = await client.list_lab_networks(lab_path)
     data = result.get("data") or {}
     return find_by_name_case_insensitive(iter_named_records(data, "name"), name)
@@ -233,10 +232,9 @@ async def delete_lab_network(
     )
 
 
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("list_lab_networks"):
+
         @mcp.tool(name="list_lab_networks")
         async def _list_lab_networks(lab_path: str, network_id: int | None = None) -> dict[str, Any]:
             """List all networks in a lab, or get a single network by id.
@@ -248,6 +246,7 @@ def register(
             return await list_lab_networks(await get_client(), lab_path, network_id)
 
     if enabled("add_lab_network"):
+
         @mcp.tool(name="add_lab_network")
         async def _add_lab_network(
             lab_path: str,
@@ -287,6 +286,7 @@ def register(
             )
 
     if enabled("edit_lab_network"):
+
         @mcp.tool(name="edit_lab_network")
         async def _edit_lab_network(
             lab_path: str,
@@ -343,6 +343,7 @@ def register(
             )
 
     if enabled("delete_lab_network"):
+
         @mcp.tool(name="delete_lab_network")
         async def _delete_lab_network(
             lab_path: str, name: str = "", selection: str = "", confirm: bool = False

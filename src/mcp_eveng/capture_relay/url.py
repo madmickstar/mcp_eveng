@@ -110,8 +110,7 @@ def parse_pro_capture_url(url: str) -> ProCaptureUrl:
     segments = [unquote(p) for p in parsed.path.lstrip("/").split("/")]
     if len(segments) != 4:
         raise ValueError(
-            f"expected 4 path segments (container/token/relay_port/eveng_host), "
-            f"got {len(segments)}: {url!r}"
+            f"expected 4 path segments (container/token/relay_port/eveng_host), got {len(segments)}: {url!r}"
         )
 
     container, token, relay_port_str, eveng_host = segments

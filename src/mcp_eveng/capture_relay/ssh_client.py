@@ -32,8 +32,9 @@ where the bug was -- is now covered without needing one.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from .config import CaptureSSHSettings
 
@@ -103,6 +104,8 @@ async def streaming_process(settings: CaptureSSHSettings, command: str) -> Async
     """
     import asyncssh
 
-    async with asyncssh.connect(**_connect_kwargs(settings)) as conn:
-        async with conn.create_process(command, encoding=None) as process:
-            yield process
+    async with (
+        asyncssh.connect(**_connect_kwargs(settings)) as conn,
+        conn.create_process(command, encoding=None) as process,
+    ):
+        yield process

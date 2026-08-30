@@ -93,7 +93,8 @@ caller to already know its current values.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -119,9 +120,7 @@ def _find_interface_index(interfaces_data: dict[str, Any], label: str) -> int | 
     return None
 
 
-def _find_connection(
-    topology: list[Any], node_id: int, interface_label: str
-) -> dict[str, Any] | None:
+def _find_connection(topology: list[Any], node_id: int, interface_label: str) -> dict[str, Any] | None:
     """The one topology entry with `node_id`+`interface_label` on either end."""
     node_token = f"node{node_id}"
     needle = interface_label.strip().lower()
@@ -215,26 +214,28 @@ async def set_link_quality(
 
     text = str(interface).strip()
     if text.isdigit():
-        near_index: int | None = int(text)
+        index_candidate = int(text)
         ethernet = interfaces_data.get("ethernet")
         near_label = None
-        if isinstance(ethernet, list) and 0 <= near_index < len(ethernet):
-            iface = ethernet[near_index]
+        if isinstance(ethernet, list) and 0 <= index_candidate < len(ethernet):
+            iface = ethernet[index_candidate]
             if isinstance(iface, dict):
                 near_label = str(iface.get("name", ""))
         if near_label is None:
             return {
                 "status": "error",
-                "message": f"interface index {near_index} not found on node {node_id}",
+                "message": f"interface index {index_candidate} not found on node {node_id}",
             }
+        near_index: int = index_candidate
     else:
         near_label = text
-        near_index = _find_interface_index(interfaces_data, text)
-        if near_index is None:
+        resolved_near_index = _find_interface_index(interfaces_data, text)
+        if resolved_near_index is None:
             return {
                 "status": "error",
                 "message": f"No interface named {text!r} found on node {node_id}.",
             }
+        near_index = resolved_near_index
 
     topo_result = await client.get_lab_topology(lab_path)
     topology = topo_result.get("data")
@@ -312,10 +313,7 @@ async def set_link_quality(
         if resolved_far_index is None:
             return {
                 "status": "error",
-                "message": (
-                    f"Could not resolve interface {far_label!r} on far-side "
-                    f"node {far_node_id} to an index."
-                ),
+                "message": (f"Could not resolve interface {far_label!r} on far-side node {far_node_id} to an index."),
             }
         far_interface_id = resolved_far_index
 

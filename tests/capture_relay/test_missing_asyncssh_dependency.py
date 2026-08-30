@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import sys
 
-import pytest
-
 
 def test_server_module_imports_without_asyncssh_installed(monkeypatch) -> None:
     """Regression test for a real failure: a plain `pip install -e .`
@@ -24,7 +22,6 @@ def test_server_module_imports_without_asyncssh_installed(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "asyncssh", None)  # any `import asyncssh` now raises
 
     import mcp_eveng.server  # noqa: F401 -- the import itself is the test
-
     from mcp_eveng.server import create_server
 
     server = create_server()

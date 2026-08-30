@@ -12,7 +12,10 @@ def test_default_base_url() -> None:
 
 def test_base_url_reflects_https_and_port() -> None:
     settings = EvengSettings(
-        host="eve.example.com", port=443, protocol="https", _env_file=None  # type: ignore[call-arg]
+        host="eve.example.com",
+        port=443,
+        protocol="https",
+        _env_file=None,  # type: ignore[call-arg]
     )
     assert settings.base_url == "https://eve.example.com:443/api"
 
@@ -113,14 +116,16 @@ def test_log_level_validator_uses_module_constant_not_private_class_attribute() 
 
 def test_allowed_hosts_splits_comma_separated_string() -> None:
     settings = MCPTransportSettings(
-        allowed_hosts="192.168.1.100:8000,192.168.1.150:*", _env_file=None  # type: ignore[call-arg]
+        allowed_hosts="192.168.1.100:8000,192.168.1.150:*",
+        _env_file=None,  # type: ignore[call-arg]
     )
     assert settings.allowed_hosts == ["192.168.1.100:8000", "192.168.1.150:*"]
 
 
 def test_allowed_hosts_strips_whitespace_around_entries() -> None:
     settings = MCPTransportSettings(
-        allowed_hosts=" 192.168.1.100:8000 , 192.168.1.150:* ", _env_file=None  # type: ignore[call-arg]
+        allowed_hosts=" 192.168.1.100:8000 , 192.168.1.150:* ",
+        _env_file=None,  # type: ignore[call-arg]
     )
     assert settings.allowed_hosts == ["192.168.1.100:8000", "192.168.1.150:*"]
 

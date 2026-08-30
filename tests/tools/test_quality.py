@@ -337,9 +337,7 @@ async def test_set_link_quality_errors_when_interface_not_connected() -> None:
     )
     client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1", "Gi0/2")
 
-    result = await quality.set_link_quality(
-        client, "/Lab 1.unl", node_id=48, interface="Gi0/2", delay=5
-    )
+    result = await quality.set_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi0/2", delay=5)
 
     assert result["status"] == "error"
     assert "No existing connection" in result["message"]
@@ -350,9 +348,7 @@ async def test_set_link_quality_errors_on_unknown_interface_name() -> None:
     client = make_client(get_status=PRO_STATUS)
     client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1")
 
-    result = await quality.set_link_quality(
-        client, "/Lab 1.unl", node_id=48, interface="Gi9/9", delay=5
-    )
+    result = await quality.set_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi9/9", delay=5)
 
     assert result["status"] == "error"
     assert "Gi9/9" in result["message"]

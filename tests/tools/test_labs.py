@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 from mcp_eveng.tools import labs
 
 
-
 def make_client(**method_returns) -> AsyncMock:
     client = AsyncMock()
     for name, value in method_returns.items():
@@ -28,9 +27,7 @@ async def test_get_lab_passes_path() -> None:
 async def test_create_lab_forwards_all_fields() -> None:
     client = make_client(create_lab={"status": "success"})
 
-    await labs.create_lab(
-        client, "/User1", "New Lab", version="2", author="Me", description="desc", body="body"
-    )
+    await labs.create_lab(client, "/User1", "New Lab", version="2", author="Me", description="desc", body="body")
 
     client.create_lab.assert_awaited_once_with(
         "/User1", "New Lab", version="2", author="Me", description="desc", body="body"
@@ -415,9 +412,7 @@ async def test_open_lab_no_match() -> None:
 
 async def test_open_lab_multiple_matches_asks_to_narrow() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs_for_open(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs_for_open(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
 
     result = await labs.open_lab(client, "test")
 
@@ -529,9 +524,7 @@ async def test_open_lab_selection_by_full_name_case_insensitive() -> None:
 
 async def test_open_lab_selection_by_full_path() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs_for_open(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs_for_open(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
     client.get_lab.return_value = {"status": "success", "data": {"lock": 0, "name": "test"}}
 
     result = await labs.open_lab(client, "test", selection="/User2/test.unl")
@@ -542,9 +535,7 @@ async def test_open_lab_selection_by_full_path() -> None:
 
 async def test_open_lab_invalid_selection_is_error() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs_for_open(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs_for_open(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
 
     result = await labs.open_lab(client, "test", selection="zzz")
 
@@ -627,9 +618,7 @@ async def test_delete_lab_matches_by_full_path_case_insensitive() -> None:
 
 async def test_delete_lab_multiple_matches_require_selection() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
 
     result = await labs.delete_lab(client, "test")
 
@@ -651,14 +640,10 @@ async def test_delete_lab_multiple_matches_never_allows_selecting_more_than_one(
 
 async def test_delete_lab_narrowing_by_exact_path_resolves_ambiguity() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
     client.delete_lab.return_value = {"status": "success"}
 
-    result = await labs.delete_lab(
-        client, "test", selection="/User2/test.unl", confirm=True
-    )
+    result = await labs.delete_lab(client, "test", selection="/User2/test.unl", confirm=True)
 
     client.delete_lab.assert_awaited_once_with("/User2/test.unl")
     assert result["status"] == "success"
@@ -666,9 +651,7 @@ async def test_delete_lab_narrowing_by_exact_path_resolves_ambiguity() -> None:
 
 async def test_delete_lab_narrowing_by_number_then_confirm() -> None:
     client = AsyncMock()
-    client.list_all_labs.return_value = _labs(
-        ("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl")
-    )
+    client.list_all_labs.return_value = _labs(("test.unl", "/User1/test.unl"), ("test.unl", "/User2/test.unl"))
     client.delete_lab.return_value = {"status": "success"}
 
     narrowed = await labs.delete_lab(client, "test", selection="2")

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -40,9 +41,7 @@ async def _folder_contents_bullets(client: EvengClient, path: str) -> list[str]:
     result = await client.list_folder(path)
     data = result.get("data") or {}
     bullets = [
-        f"[folder] {f.get('name', f.get('path'))}"
-        for f in data.get("folders", []) or []
-        if f.get("name") != ".."
+        f"[folder] {f.get('name', f.get('path'))}" for f in data.get("folders", []) or [] if f.get("name") != ".."
     ]
     bullets += [f"[lab] {lab.get('file', lab.get('path'))}" for lab in data.get("labs", []) or []]
     return bullets
@@ -104,10 +103,9 @@ async def delete_folder(
     )
 
 
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("list_folder"):
+
         @mcp.tool(name="list_folder")
         async def _list_folder(path: str = "/") -> dict[str, Any]:
             """List the folders and labs contained in an EVENG folder.
@@ -118,6 +116,7 @@ def register(
             return await list_folder(await get_client(), path)
 
     if enabled("add_folder"):
+
         @mcp.tool(name="add_folder")
         async def _add_folder(path: str, name: str) -> dict[str, Any]:
             """Create a new folder inside an existing EVENG folder.
@@ -129,6 +128,7 @@ def register(
             return await add_folder(await get_client(), path, name)
 
     if enabled("move_folder"):
+
         @mcp.tool(name="move_folder")
         async def _move_folder(path: str, new_path: str) -> dict[str, Any]:
             """Move or rename an existing folder.
@@ -140,6 +140,7 @@ def register(
             return await move_folder(await get_client(), path, new_path)
 
     if enabled("delete_folder"):
+
         @mcp.tool(name="delete_folder")
         async def _delete_folder(
             path: str = "", search_path: str = "/", selection: str = "", confirm: bool = False

@@ -12,7 +12,8 @@ else in its own CLI except by talking to its console directly.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
@@ -26,7 +27,7 @@ GetClient = Callable[[], Awaitable[EvengClient]]
 def _is_running(node_data: dict[str, Any]) -> bool:
     status = node_data.get("status")
     try:
-        return int(status) != 0
+        return int(status) != 0  # type: ignore[arg-type]  # deliberately unguarded -- caught below
     except (TypeError, ValueError):
         return False
 
@@ -88,16 +89,11 @@ async def telnet_node(
     if parsed.scheme != "telnet" or not parsed.hostname or not parsed.port:
         return {
             "status": "error",
-            "message": (
-                f"Could not parse a telnet host/port from node {node_id}'s reported "
-                f"console url ({url!r})."
-            ),
+            "message": (f"Could not parse a telnet host/port from node {node_id}'s reported console url ({url!r})."),
         }
 
     try:
-        transcript = await telnet_session(
-            parsed.hostname, parsed.port, command_list, idle_timeout=wait_seconds
-        )
+        transcript = await telnet_session(parsed.hostname, parsed.port, command_list, idle_timeout=wait_seconds)
     except (OSError, ConnectionError) as exc:
         return {
             "status": "error",
@@ -145,6 +141,4 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                     moving to the next one. Increase for commands with
                     large or slow output.
             """
-            return await telnet_node(
-                await get_client(), lab_path, node_id, commands, wait_seconds=wait_seconds
-            )
+            return await telnet_node(await get_client(), lab_path, node_id, commands, wait_seconds=wait_seconds)

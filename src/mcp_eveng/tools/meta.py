@@ -6,7 +6,8 @@ catalog endpoints) -- this is about the MCP server itself, not EVE-NG.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -26,10 +27,7 @@ async def list_tools(mcp: FastMCP) -> dict[str, Any]:
     """
     tools = await mcp.list_tools()
     entries = sorted(
-        (
-            {"name": t.name, "description": (t.description or "").split("\n", 1)[0].strip()}
-            for t in tools
-        ),
+        ({"name": t.name, "description": (t.description or "").split("\n", 1)[0].strip()} for t in tools),
         key=lambda entry: entry["name"],
     )
     return {

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from mcp_eveng.capture_relay.config import CaptureSSHSettings
 from mcp_eveng.capture_relay.ssh_client import _connect_kwargs, streaming_process
 
@@ -121,4 +119,3 @@ async def test_streaming_process_passes_connect_kwargs_through(monkeypatch) -> N
 
     assert captured_connect_kwargs["host"] == "192.168.1.50"
     assert captured_connect_kwargs["port"] == 2222
-

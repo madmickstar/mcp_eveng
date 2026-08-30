@@ -41,18 +41,19 @@ relay is unreachable. No password ever appears in the URL either way.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from ..client import EvengClient
-from ..edition import is_pro_edition
 from ..capture_relay import ssh_client as _ssh_client
 from ..capture_relay.config import CaptureSSHSettings, CaptureURLSettings
 from ..capture_relay.docker_ps import DOCKER_PS_COMMAND, RunningCapture, parse_docker_ps_output
 from ..capture_relay.ssh_client import run_command as _default_run_command
 from ..capture_relay.tokens import issue_token
 from ..capture_relay.url import build_pro_capture_url
+from ..client import EvengClient
+from ..edition import is_pro_edition
 
 GetClient = Callable[[], Awaitable[EvengClient]]
 RunCommand = Callable[[CaptureSSHSettings, str], Awaitable[str]]
@@ -89,7 +90,7 @@ def _require_asyncssh() -> dict[str, Any] | None:
             "status": "error",
             "message": (
                 "This feature requires the optional 'capture-relay' extra "
-                "-- run `pip install -e \".[capture-relay]\"` (or just "
+                '-- run `pip install -e ".[capture-relay]"` (or just '
                 "`pip install asyncssh` for this side; Starlette/uvicorn "
                 "are only needed by the standalone relay itself, not by "
                 "list_captures/get_capture)."
@@ -167,9 +168,7 @@ def _resolve_capture(
         return captures[position - 1]
 
     needle = str(container).strip().lower()
-    matches = [
-        c for c in captures if c.name.lower() == needle or c.container_id.lower().startswith(needle)
-    ]
+    matches = [c for c in captures if c.name.lower() == needle or c.container_id.lower().startswith(needle)]
     if not matches:
         return {"status": "error", "message": f"No running capture matches {container!r}."}
     if len(matches) > 1:

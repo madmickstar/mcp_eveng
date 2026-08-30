@@ -7,7 +7,6 @@ import pytest
 from mcp_eveng.tools import nodes
 
 
-
 def make_client(**method_returns) -> AsyncMock:
     client = AsyncMock()
     for name, value in method_returns.items():
@@ -107,9 +106,7 @@ async def test_add_lab_node_empty_search_lists_every_template() -> None:
 
 async def test_add_lab_node_search_no_match_is_cancelled() -> None:
     client = AsyncMock()
-    client.list_node_templates.return_value = _templates_data(
-        ("csr1000vng", "Cisco CSR 1000V (XE 16.x)")
-    )
+    client.list_node_templates.return_value = _templates_data(("csr1000vng", "Cisco CSR 1000V (XE 16.x)"))
 
     result = await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="juniper")
 
@@ -119,9 +116,7 @@ async def test_add_lab_node_search_no_match_is_cancelled() -> None:
 
 async def test_add_lab_node_search_by_vendor_single_match_proceeds_without_prompt() -> None:
     client = AsyncMock()
-    client.list_node_templates.return_value = _templates_data(
-        ("vjunosevo", "Juniper vEVO Router")
-    )
+    client.list_node_templates.return_value = _templates_data(("vjunosevo", "Juniper vEVO Router"))
     client.get_node_template.return_value = {
         "status": "success",
         "data": {"type": "qemu", "options": {"image": {"value": "x", "list": {"x": "x"}}}},
@@ -203,9 +198,7 @@ async def test_add_lab_node_selection_by_exact_name_resolves_template() -> None:
     client.list_lab_nodes.return_value = {"status": "success", "data": {}}
     client.add_lab_node.return_value = {"status": "success"}
 
-    await nodes.add_lab_node(
-        client, "/User1/Lab 1.unl", template="cisco", selection="Cisco Catalyst 8000v"
-    )
+    await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="cisco", selection="Cisco Catalyst 8000v")
 
     client.get_node_template.assert_awaited_once_with("c8000v")
 
@@ -394,9 +387,7 @@ async def test_add_lab_node_multiple_images_but_image_given_does_not_prompt() ->
     client.list_lab_nodes.return_value = {"status": "success", "data": {}}
     client.add_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.add_lab_node(
-        client, "/User1/Lab 1.unl", template="linux", image="linux-alpine-3.21.3"
-    )
+    result = await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="linux", image="linux-alpine-3.21.3")
 
     client.add_lab_node.assert_awaited_once()
     assert client.add_lab_node.await_args.kwargs["image"] == "linux-alpine-3.21.3"
@@ -540,9 +531,7 @@ async def test_add_lab_node_sixth_node_wraps_to_new_row() -> None:
     client = AsyncMock()
     client.list_node_templates.return_value = _templates_data(("viosl2", "Cisco vIOS Switch"))
     client.get_node_template.return_value = {"status": "success", "data": {"type": "qemu", "options": {}}}
-    client.list_lab_nodes.return_value = _existing_nodes(
-        (100, 100), (200, 100), (300, 100), (400, 100), (500, 100)
-    )
+    client.list_lab_nodes.return_value = _existing_nodes((100, 100), (200, 100), (300, 100), (400, 100), (500, 100))
     client.add_lab_node.return_value = {"status": "success"}
 
     await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="viosl2")
@@ -1118,9 +1107,7 @@ async def test_connect_interface_requires_exactly_one_target() -> None:
     neither = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1)
     assert neither["status"] == "error"
 
-    both = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, target_node_id=2, network_id=5
-    )
+    both = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, target_node_id=2, network_id=5)
     assert both["status"] == "error"
 
     client.get_node_interfaces.assert_not_awaited()
@@ -1169,9 +1156,7 @@ async def test_connect_interface_selection_by_number_resolves_end_to_end() -> No
     client.list_lab_networks.return_value = {"status": "success", "data": {"3": {"id": 3}}}
     client.set_node_interface.return_value = {"status": "success"}
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, interface_selection="2", network_id=3
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, interface_selection="2", network_id=3)
 
     assert result["status"] == "success"
     client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 1, 3)
@@ -1192,9 +1177,7 @@ async def test_connect_interface_node_to_node_omitted_interface_resolves_when_un
 
     result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, target_node_id=2)
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", network_type="bridge", name="p2p_1_0_2_0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", network_type="bridge", name="p2p_1_0_2_0")
     assert client.set_node_interface.await_args_list[0].args == ("/User1/Lab 1.unl", 1, 0, 7)
     assert client.set_node_interface.await_args_list[1].args == ("/User1/Lab 1.unl", 2, 0, 7)
     client.edit_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", 7, visibility=0)
@@ -1219,9 +1202,7 @@ async def test_connect_interface_node_to_node_explicit_interfaces() -> None:
         client, "/User1/Lab 1.unl", 1, interface="Gi0/1", target_node_id=2, target_interface=0
     )
 
-    client.add_lab_network.assert_awaited_once_with(
-        "/User1/Lab 1.unl", network_type="bridge", name="p2p_1_1_2_0"
-    )
+    client.add_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", network_type="bridge", name="p2p_1_1_2_0")
     client.edit_lab_network.assert_awaited_once_with("/User1/Lab 1.unl", 3, visibility=0)
 
 
@@ -1241,9 +1222,7 @@ async def test_connect_interface_explicit_index_already_connected_requires_confi
         "data": {"ethernet": [{"name": "Gi0/0", "network_id": 5}, {"name": "Gi0/1", "network_id": 0}]},
     }
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, interface=0, network_id=9
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, interface=0, network_id=9)
 
     assert result["status"] == "confirmation_required"
     assert "Gi0/0" in result["message"]
@@ -1263,9 +1242,7 @@ async def test_connect_interface_explicit_index_already_connected_confirm_true_p
     }
     client.set_node_interface.return_value = {"status": "success"}
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, interface=0, network_id=9, confirm=True
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, interface=0, network_id=9, confirm=True)
 
     assert result["status"] == "success"
     client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 0, 9)
@@ -1450,9 +1427,7 @@ async def test_connect_interface_node_to_network_by_name_single_match() -> None:
     }
     client.set_node_interface.return_value = {"status": "success"}
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, network_name="backbone"
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, network_name="backbone")
 
     client.set_node_interface.assert_awaited_once_with("/User1/Lab 1.unl", 1, 0, 4)
     assert result["status"] == "success"
@@ -1466,9 +1441,7 @@ async def test_connect_interface_node_to_network_by_name_no_match() -> None:
     }
     client.list_lab_networks.return_value = {"status": "success", "data": {}}
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, network_name="nonexistent"
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, network_name="nonexistent")
 
     assert result["status"] == "cancelled"
     client.set_node_interface.assert_not_awaited()
@@ -1486,9 +1459,7 @@ async def test_connect_interface_node_to_network_by_name_ambiguous() -> None:
         "data": {"4": {"name": "Backbone", "id": 4}, "5": {"name": "Backbone", "id": 5}},
     }
 
-    result = await nodes.connect_interface(
-        client, "/User1/Lab 1.unl", 1, network_name="backbone"
-    )
+    result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, network_name="backbone")
 
     assert result["status"] == "error"
     client.set_node_interface.assert_not_awaited()
@@ -1506,8 +1477,6 @@ async def test_connect_interface_node_to_network_interface_error() -> None:
     assert result["status"] == "error"
     client.set_node_interface.assert_not_awaited()
     client.get_status.assert_not_awaited()
-
-
 
 
 def test_is_running_true_for_nonzero_status() -> None:
@@ -1749,9 +1718,7 @@ async def test_edit_lab_node_confirm_duplicate_name_bypasses_the_check() -> None
     client.list_lab_nodes.return_value = {"status": "success", "data": {"name": "SW1", "status": 0}}
     client.edit_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.edit_lab_node(
-        client, "/User1/Lab 1.unl", 9, name="SW1", confirm_duplicate_name=True
-    )
+    result = await nodes.edit_lab_node(client, "/User1/Lab 1.unl", 9, name="SW1", confirm_duplicate_name=True)
 
     assert result["status"] == "success"
     client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 9, name="SW1")
@@ -1917,9 +1884,7 @@ async def test_change_node_delay_node_id_overrides_bulk_flag() -> None:
     }
     client.edit_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", node_id=9, bulk=True, confirm=True
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", node_id=9, bulk=True, confirm=True)
 
     # Single-node mode still applies -- only one node touched, no bulk search.
     assert result["status"] == "success"
@@ -1967,13 +1932,9 @@ async def test_change_node_delay_bulk_by_name_single_term_multiple_matches() -> 
 
 async def test_change_node_delay_bulk_by_name_list_preserves_given_order() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _delay_lab_nodes(
-        _delay_node(1, "SW1"), _delay_node(2, "R2")
-    )
+    client.list_lab_nodes.return_value = _delay_lab_nodes(_delay_node(1, "SW1"), _delay_node(2, "R2"))
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", bulk=True, names=["R2", "SW1"]
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, names=["R2", "SW1"])
 
     # "R2" term given first -> gets increment*1; "SW1" term second -> increment*2.
     assert "R2 (id 2): 0s -> 10s" in result["message"]
@@ -1984,9 +1945,7 @@ async def test_change_node_delay_bulk_by_name_dedupes_node_matching_multiple_ter
     client = AsyncMock()
     client.list_lab_nodes.return_value = _delay_lab_nodes(_delay_node(1, "RingSW1"))
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", bulk=True, names=["Ring", "SW1"]
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, names=["Ring", "SW1"])
 
     # Matches both terms but must appear -- and be assigned a delay -- once only.
     assert result["message"].count("RingSW1") == 1
@@ -1996,13 +1955,9 @@ async def test_change_node_delay_bulk_by_name_dedupes_node_matching_multiple_ter
 
 async def test_change_node_delay_bulk_by_name_custom_increment() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _delay_lab_nodes(
-        _delay_node(1, "SW1"), _delay_node(2, "SW2")
-    )
+    client.list_lab_nodes.return_value = _delay_lab_nodes(_delay_node(1, "SW1"), _delay_node(2, "SW2"))
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", bulk=True, names="SW", increment=5
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, names="SW", increment=5)
 
     assert "-> 5s" in result["message"]
     assert "-> 10s" in result["message"]
@@ -2015,9 +1970,7 @@ async def test_change_node_delay_bulk_by_name_confirm_applies_and_stops_running(
     )
     client.edit_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", bulk=True, names="SW", confirm=True
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, names="SW", confirm=True)
 
     client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)  # only the running one
     client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=10, name="SW1")
@@ -2067,9 +2020,7 @@ async def test_change_node_delay_bulk_order_applies_chosen_sequence() -> None:
 
 async def test_change_node_delay_bulk_order_accepts_space_separated() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _delay_lab_nodes(
-        _delay_node(1, "SW1"), _delay_node(2, "SW2")
-    )
+    client.list_lab_nodes.return_value = _delay_lab_nodes(_delay_node(1, "SW1"), _delay_node(2, "SW2"))
 
     result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, order="2 1")
 
@@ -2110,14 +2061,10 @@ async def test_change_node_delay_bulk_order_out_of_range_is_error() -> None:
 
 async def test_change_node_delay_bulk_order_confirm_applies() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _delay_lab_nodes(
-        _delay_node(1, "SW1"), _delay_node(2, "SW2")
-    )
+    client.list_lab_nodes.return_value = _delay_lab_nodes(_delay_node(1, "SW1"), _delay_node(2, "SW2"))
     client.edit_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.change_node_delay(
-        client, "/User1/Lab 1.unl", bulk=True, order="2,1", confirm=True
-    )
+    result = await nodes.change_node_delay(client, "/User1/Lab 1.unl", bulk=True, order="2,1", confirm=True)
 
     client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, delay=10, name="SW2")
     client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, delay=20, name="SW1")
@@ -2171,9 +2118,7 @@ async def test_edit_lab_nodes_by_template_no_match_is_cancelled() -> None:
 
 async def test_edit_lab_nodes_by_template_single_template_skips_to_node_selection() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
     result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", template="vios")
@@ -2185,9 +2130,7 @@ async def test_edit_lab_nodes_by_template_single_template_skips_to_node_selectio
 
 async def test_edit_lab_nodes_by_template_multiple_templates_requires_narrowing() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(
         ("viosl2", "Cisco vIOS Switch"), ("c8000v", "Cisco Catalyst 8000v")
     )
@@ -2201,16 +2144,12 @@ async def test_edit_lab_nodes_by_template_multiple_templates_requires_narrowing(
 
 async def test_edit_lab_nodes_by_template_selection_by_number() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(
         ("c8000v", "Cisco Catalyst 8000v"), ("viosl2", "Cisco vIOS Switch")
     )
 
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", vendor="cisco", template_selection="1"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", vendor="cisco", template_selection="1")
 
     # Sorted template_ids alphabetically: c8000v < viosl2 -> "1" = c8000v.
     assert result["status"] == "selection_required"
@@ -2221,9 +2160,7 @@ async def test_edit_lab_nodes_by_template_selection_by_number() -> None:
 
 async def test_edit_lab_nodes_by_template_selection_by_exact_id() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(
         ("c8000v", "Cisco Catalyst 8000v"), ("viosl2", "Cisco vIOS Switch")
     )
@@ -2237,9 +2174,7 @@ async def test_edit_lab_nodes_by_template_selection_by_exact_id() -> None:
 
 async def test_edit_lab_nodes_by_template_selection_matching_more_than_one_is_error() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(
         ("c8000v", "Cisco Catalyst 8000v"), ("viosl2", "Cisco vIOS Switch")
     )
@@ -2254,9 +2189,7 @@ async def test_edit_lab_nodes_by_template_selection_matching_more_than_one_is_er
 
 async def test_edit_lab_nodes_by_template_invalid_template_selection_is_error() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(
         ("c8000v", "Cisco Catalyst 8000v"), ("viosl2", "Cisco vIOS Switch")
     )
@@ -2270,14 +2203,10 @@ async def test_edit_lab_nodes_by_template_invalid_template_selection_is_error() 
 
 async def test_edit_lab_nodes_by_template_node_selection_all() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", template="vios", node_selection="all"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", template="vios", node_selection="all")
 
     assert result["status"] == "selection_required"  # now prompts for component
     assert len(result["data"]["matches"]) == 2
@@ -2286,14 +2215,10 @@ async def test_edit_lab_nodes_by_template_node_selection_all() -> None:
 
 async def test_edit_lab_nodes_by_template_node_selection_specific_number() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", template="vios", node_selection="2"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", template="vios", node_selection="2")
 
     assert len(result["data"]["matches"]) == 1
     assert "SW2" in result["data"]["matches"][0]
@@ -2301,14 +2226,10 @@ async def test_edit_lab_nodes_by_template_node_selection_specific_number() -> No
 
 async def test_edit_lab_nodes_by_template_node_selection_invalid_is_error() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", template="vios", node_selection="99"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", template="vios", node_selection="99")
 
     assert result["status"] == "error"
 
@@ -2318,9 +2239,7 @@ async def test_edit_lab_nodes_by_template_no_component_prompts() -> None:
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", template="vios", node_selection="all"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", template="vios", node_selection="all")
 
     assert result["status"] == "selection_required"
     assert "interfaces, cpu, memory, icon, or image" in result["message"]
@@ -2378,9 +2297,7 @@ async def test_edit_lab_nodes_by_template_component_given_no_value_prompts() -> 
 
 async def test_edit_lab_nodes_by_template_value_given_requires_final_confirmation() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "SW2", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
 
     result = await nodes.edit_lab_nodes_by_template(
@@ -2489,9 +2406,7 @@ async def test_edit_lab_nodes_by_template_icon_search_single_match_goes_to_confi
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
-    client.list_network_types.return_value = {
-        "icons": {"lan.png": "lan.png", "Switch2.png": "Switch2.png"}
-    }
+    client.list_network_types.return_value = {"icons": {"lan.png": "lan.png", "Switch2.png": "Switch2.png"}}
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2532,9 +2447,7 @@ async def test_edit_lab_nodes_by_template_icon_selection_by_number() -> None:
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
-    client.list_network_types.return_value = {
-        "icons": {"Switch2.png": "x", "Switch-2D-L2-Generic-S.svg": "x"}
-    }
+    client.list_network_types.return_value = {"icons": {"Switch2.png": "x", "Switch-2D-L2-Generic-S.svg": "x"}}
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2555,9 +2468,7 @@ async def test_edit_lab_nodes_by_template_icon_selection_by_exact_filename() -> 
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"))
     client.list_node_templates.return_value = _templates_catalog(("viosl2", "Cisco vIOS Switch"))
-    client.list_network_types.return_value = {
-        "icons": {"Switch2.png": "x", "Switch-2D-L2-Generic-S.svg": "x"}
-    }
+    client.list_network_types.return_value = {"icons": {"Switch2.png": "x", "Switch-2D-L2-Generic-S.svg": "x"}}
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2701,9 +2612,7 @@ async def test_edit_lab_nodes_by_template_image_selection_by_number() -> None:
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images(
-        "c8000v-17.06.02", "c8000v-26.01.01"
-    )
+    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2723,9 +2632,7 @@ async def test_edit_lab_nodes_by_template_image_selection_by_exact_filename() ->
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images(
-        "c8000v-17.06.02", "c8000v-26.01.01"
-    )
+    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2744,9 +2651,7 @@ async def test_edit_lab_nodes_by_template_image_invalid_selection_is_error() -> 
     client = AsyncMock()
     client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images(
-        "c8000v-17.06.02", "c8000v-26.01.01"
-    )
+    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2765,9 +2670,7 @@ async def test_edit_lab_nodes_by_template_image_confirm_applies_across_all_match
     # This is the actual "update image in bulk for all devices with same
     # node template" behavior the request asked for.
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "C8K1", "c8000v"), _node(2, "C8K2", "c8000v")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"), _node(2, "C8K2", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
     client.get_node_template.return_value = _template_with_images("c8000v-26.01.01")
     client.edit_lab_node.return_value = {"status": "success"}
@@ -2789,21 +2692,16 @@ async def test_edit_lab_nodes_by_template_image_confirm_applies_across_all_match
 
 async def test_edit_lab_nodes_by_template_vendor_and_template_combined_and() -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(
-        _node(1, "SW1", "viosl2"), _node(2, "R1", "vjunosrouter")
-    )
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "SW1", "viosl2"), _node(2, "R1", "vjunosrouter"))
     client.list_node_templates.return_value = _templates_catalog(
         ("viosl2", "Cisco vIOS Switch"), ("vjunosrouter", "Juniper vRouter")
     )
 
     # vendor=cisco AND template=vios -> only viosl2/SW1, not vjunosrouter.
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", vendor="cisco", template="vios"
-    )
+    result = await nodes.edit_lab_nodes_by_template(client, "/User1/Lab 1.unl", vendor="cisco", template="vios")
 
     assert len(result["data"]["matches"]) == 1
     assert "SW1" in result["data"]["matches"][0]
-
 
 
 async def test_delete_lab_node_requires_non_empty_name() -> None:
@@ -2881,9 +2779,7 @@ async def test_delete_lab_node_narrowing_by_exact_name_then_confirm() -> None:
     }
     client.delete_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.delete_lab_node(
-        client, "/User1/Lab 1.unl", "canvas", selection="canvas-15", confirm=True
-    )
+    result = await nodes.delete_lab_node(client, "/User1/Lab 1.unl", "canvas", selection="canvas-15", confirm=True)
 
     client.delete_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
     assert result["status"] == "success"
@@ -2897,9 +2793,7 @@ async def test_delete_lab_node_allows_multiple_selection() -> None:
     }
     client.delete_lab_node.return_value = {"status": "success"}
 
-    result = await nodes.delete_lab_node(
-        client, "/User1/Lab 1.unl", "canvas", selection="1,2", confirm=True
-    )
+    result = await nodes.delete_lab_node(client, "/User1/Lab 1.unl", "canvas", selection="1,2", confirm=True)
 
     assert client.delete_lab_node.await_count == 2
     assert result["status"] == "success"

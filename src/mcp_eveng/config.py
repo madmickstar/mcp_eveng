@@ -39,16 +39,12 @@ class EvengSettings(BaseSettings):
 
     host: str = Field(default="127.0.0.1", description="EVENG server hostname or IP")
     port: int = Field(default=443, description="EVENG server port")
-    protocol: Literal["http", "https"] = Field(
-        default="https", description="Scheme used to reach the EVENG API"
-    )
+    protocol: Literal["http", "https"] = Field(default="https", description="Scheme used to reach the EVENG API")
     username: str = Field(default="admin", description="EVENG login username")
     password: SecretStr = Field(default=SecretStr("eve"), description="EVENG login password")
     # "1" for native/telnet console (community default), "0" for Pro/HTML5-only.
     html5: str = Field(default="-1", description="EVENG html5 login flag")
-    verify_ssl: bool = Field(
-        default=False, description="Verify TLS certificates (Pro/https, often self-signed)"
-    )
+    verify_ssl: bool = Field(default=False, description="Verify TLS certificates (Pro/https, often self-signed)")
     timeout_seconds: float = Field(default=30.0, description="HTTP request timeout")
 
     @field_validator("host", mode="before")
@@ -97,9 +93,7 @@ class MCPTransportSettings(BaseSettings):
 
     host: str = Field(default="127.0.0.1", description="Bind host for --sse/--http")
     port: int = Field(default=8000, description="Bind port for --sse/--http")
-    http_path: str = Field(
-        default="/mcp", description="Mount path for the streamable-http app (--http)"
-    )
+    http_path: str = Field(default="/mcp", description="Mount path for the streamable-http app (--http)")
     sse_path: str = Field(default="/sse", description="Mount path for the legacy sse app (--sse)")
     tools_config_path: str = Field(
         default="tools.env",
@@ -131,9 +125,7 @@ class MCPTransportSettings(BaseSettings):
     def _normalize_log_level(cls, v: str) -> str:
         level = str(v).strip().upper()
         if level not in _VALID_LOG_LEVELS:
-            raise ValueError(
-                f"MCP_LOG_LEVEL must be one of {_VALID_LOG_LEVELS}, got {v!r}"
-            )
+            raise ValueError(f"MCP_LOG_LEVEL must be one of {_VALID_LOG_LEVELS}, got {v!r}")
         return level
 
     @field_validator("allowed_hosts", mode="before")

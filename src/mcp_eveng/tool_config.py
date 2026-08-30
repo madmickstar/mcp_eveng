@@ -32,8 +32,8 @@ differences" section for why those two specifically differ by edition.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from dotenv import dotenv_values
 

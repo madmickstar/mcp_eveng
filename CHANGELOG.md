@@ -7,10 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **GitHub Actions' CI "lint" job was failing outright** (`Ruff lint`
+  step, discovered live via the actual CI run after merging to `main` --
+  never caught locally since this project's own verification throughout
+  had only ever run `python -m py_compile`, never the real `ruff`/`mypy`
+  checks CI actually runs). 110 `ruff check` errors, the large majority
+  in files that predate this session's work entirely (`client.py`,
+  `edition.py`, `tools/nodes.py`, `telnet.py`, etc.) -- this had almost
+  certainly been failing before any of the capture-relay work started,
+  just never noticed since CI apparently hadn't run against this repo
+  before. Fixed in three passes:
+  - `ruff check`: raised `line-length` from 100 to 120 in
+    `pyproject.toml` (the single most surgical fix for the ~80 `E501`
+    violations, none of which exceeded 114 characters -- manually
+    rewrapping dozens of lines across files this session never touched
+    would have been far riskier for no real benefit), ran
+    `ruff check --fix` for the ~40 mechanically-fixable ones (import
+    sorting, unused imports, `typing` -> `collections.abc`
+    modernization), then manually resolved the 7 requiring judgment
+    (a nested `with` combined into one statement, a `try`/`except`/
+    `pass` replaced with `contextlib.suppress`, `.keys()` iteration
+    simplified, a tuple-membership check replacing chained `==`, a `for`
+    loop replaced with `all(...)`, an `if`/`else` replaced with a
+    ternary, and a test's blind `except Exception` narrowed to the
+    actual `pydantic.ValidationError` it was testing for).
+  - `ruff format --check`: the `line-length` change left 36 files with
+    lines the formatter wanted to un-wrap now that they fit comfortably
+    -- ran `ruff format .` to apply that.
+  - `mypy`: 18 errors, mostly a repeated pattern -- an `int | None`
+    (or similarly optional) value passed somewhere expecting a
+    non-optional `int`, where the code's own control flow already
+    guaranteed it couldn't actually be `None` at that point but `mypy`
+    couldn't trace the guarantee across a separately-stored boolean
+    flag or an `if`/`else` spanning many lines. Fixed with explicit
+    `assert ... is not None` at each such point (zero behavior change
+    in the guaranteed-true case; a clear `AssertionError` instead of
+    silently proceeding, in the -- believed impossible -- case the
+    guarantee is ever violated) or, in `tools/quality.py`, by
+    restructuring so the variable is genuinely typed `int` once both
+    resolution branches complete rather than carrying an unnecessary
+    `int | None` union throughout. Separately, `tools/nodes.py`'s and
+    `tools/networks.py`'s `_node_id`/`_delay_node_id`/`_network_id`
+    helpers had a real (if narrow) latent crash risk -- `int(node.get(
+    "id", node.get("_key")))` would raise an unhandled `TypeError` if a
+    record ever had neither key -- now raise a clear `ValueError`
+    instead if that ever happens, rather than mypy simply being told to
+    ignore the possibility.
+  All three (`ruff check`, `ruff format --check`, `mypy src/`) now pass
+  cleanly, confirmed by actually running each one, not just reasoning
+  through the fixes. Full test suite re-run afterwards with zero
+  regressions (identical to the pre-existing baseline failure list),
+  confirming this large a cleanup pass changed no actual behavior.
+
 ## [0.3.17] - 2026-08-30
 
 **Capture-relay feature branch (`feature/capture-relay`), merged to
-`master` after a full round of live testing -- every major path
+`main` after a full round of live testing -- every major path
 confirmed working end-to-end:** stopping the relay mid-stream
 (cleanly breaks the stream rather than hanging/orphaning the remote
 process), adding/deleting link-quality settings on both source and

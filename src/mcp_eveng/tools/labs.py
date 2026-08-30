@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
 from ..edition import is_pro_edition
-from ..search import iter_named_records
 
 GetClient = Callable[[], Awaitable[EvengClient]]
 
@@ -29,9 +29,7 @@ async def create_lab(
     body: str = "",
 ) -> dict[str, Any]:
     """Create a new (empty) lab."""
-    return await client.create_lab(
-        path, name, version=version, author=author, description=description, body=body
-    )
+    return await client.create_lab(path, name, version=version, author=author, description=description, body=body)
 
 
 async def edit_lab(
@@ -68,11 +66,9 @@ async def _list_usernames(client: EvengClient) -> list[str]:
     result = await client.list_users()
     data = result.get("data") or {}
     if isinstance(data, dict):
-        return sorted(str(k) for k in data.keys())
+        return sorted(str(k) for k in data)
     if isinstance(data, list):
-        return sorted(
-            str(item["username"]) for item in data if isinstance(item, dict) and item.get("username")
-        )
+        return sorted(str(item["username"]) for item in data if isinstance(item, dict) and item.get("username"))
     return []
 
 
@@ -132,8 +128,8 @@ async def share_lab(
                 "Lab sharing is a PRO/Corporate-only EVE-NG feature -- listed as a "
                 "separate toggleable feature on EVE-NG's own official comparison page, "
                 "and confirmed live: on Community, get_lab never returns a 'shared' key "
-                "at all, and attempting to actually add a share fails with \"Lab has not "
-                "been modified\" (the request is silently accepted with no effect). This "
+                'at all, and attempting to actually add a share fails with "Lab has not '
+                'been modified" (the request is silently accepted with no effect). This '
                 "server is running Community edition, so lab sharing isn't available here."
             ),
         }
@@ -167,9 +163,7 @@ async def share_lab(
             target_users = list(matches)
         elif selection.strip():
             candidates = [{"username": u} for u in matches]
-            resolved, invalid = resolve_selection(
-                selection, candidates, lambda c, n: c["username"].lower() == n
-            )
+            resolved, invalid = resolve_selection(selection, candidates, lambda c, n: c["username"].lower() == n)
             if invalid or not resolved:
                 return {
                     "status": "error",
@@ -239,9 +233,7 @@ async def get_lab_links(client: EvengClient, lab_path: str) -> dict[str, Any]:
     return await client.get_lab_links(lab_path)
 
 
-async def list_lab_pictures(
-    client: EvengClient, lab_path: str, picture_id: int | None = None
-) -> dict[str, Any]:
+async def list_lab_pictures(client: EvengClient, lab_path: str, picture_id: int | None = None) -> dict[str, Any]:
     """List background pictures/annotations placed in a lab, or get one by id."""
     return await client.list_lab_pictures(lab_path, picture_id)
 
@@ -294,7 +286,7 @@ def _lab_matches_exact(lab: dict[str, Any], needle: str) -> bool:
     """Exact (not substring) case-insensitive match against a lab's file name OR full path."""
     file_name = str(lab.get("file", "")).strip().lower()
     path = str(lab.get("path", "")).strip().lower()
-    return needle == file_name or needle == path
+    return needle in (file_name, path)
 
 
 _OPEN_LAB_MENU = (
@@ -305,9 +297,7 @@ _OPEN_LAB_MENU = (
 )
 
 
-async def open_lab(
-    client: EvengClient, name: str, search_path: str = "/", selection: str = ""
-) -> dict[str, Any]:
+async def open_lab(client: EvengClient, name: str, search_path: str = "/", selection: str = "") -> dict[str, Any]:
     """Look up a lab by path or name substring, report its lock status, and suggest next steps.
 
     Matching is a case-insensitive substring match, against either the
@@ -363,18 +353,14 @@ async def open_lab(
             return {
                 "status": "error",
                 "message": (
-                    f"Could not match {selection!r} to any current lab. Current matches:\n"
-                    f"{format_numbered(paths)}"
+                    f"Could not match {selection!r} to any current lab. Current matches:\n{format_numbered(paths)}"
                 ),
                 "data": {"matches": paths},
             }
         if len(resolved) > 1:
             return {
                 "status": "error",
-                "message": (
-                    f"Only one lab can be opened at a time. Pick exactly one:\n"
-                    f"{format_numbered(paths)}"
-                ),
+                "message": (f"Only one lab can be opened at a time. Pick exactly one:\n{format_numbered(paths)}"),
                 "data": {"matches": paths},
             }
         target = resolved[0]
@@ -447,11 +433,9 @@ async def delete_lab(
     )
 
 
-
-def register(
-    mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
-) -> None:
+def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("get_lab"):
+
         @mcp.tool(name="get_lab")
         async def _get_lab(lab_path: str) -> dict[str, Any]:
             """Get metadata for a lab.
@@ -462,6 +446,7 @@ def register(
             return await get_lab(await get_client(), lab_path)
 
     if enabled("open_lab"):
+
         @mcp.tool(name="open_lab")
         async def _open_lab(name: str = "", search_path: str = "/", selection: str = "") -> dict[str, Any]:
             """Look up a lab by path or name substring, report its lock status, and suggest next steps.
@@ -485,6 +470,7 @@ def register(
             return await open_lab(await get_client(), name, search_path, selection)
 
     if enabled("create_lab"):
+
         @mcp.tool(name="create_lab")
         async def _create_lab(
             path: str,
@@ -509,6 +495,7 @@ def register(
             )
 
     if enabled("edit_lab"):
+
         @mcp.tool(name="edit_lab")
         async def _edit_lab(
             lab_path: str,
@@ -539,6 +526,7 @@ def register(
             )
 
     if enabled("share_lab"):
+
         @mcp.tool(name="share_lab")
         async def _share_lab(
             lab_path: str,
@@ -583,11 +571,10 @@ def register(
                     exact username(s), or "all" (every matched user).
                 confirm: Set true on the final call to actually apply.
             """
-            return await share_lab(
-                await get_client(), lab_path, search=search, selection=selection, confirm=confirm
-            )
+            return await share_lab(await get_client(), lab_path, search=search, selection=selection, confirm=confirm)
 
     if enabled("move_lab"):
+
         @mcp.tool(name="move_lab")
         async def _move_lab(lab_path: str, new_path: str) -> dict[str, Any]:
             """Move a lab to a different folder.
@@ -599,6 +586,7 @@ def register(
             return await move_lab(await get_client(), lab_path, new_path)
 
     if enabled("delete_lab"):
+
         @mcp.tool(name="delete_lab")
         async def _delete_lab(
             name: str = "", search_path: str = "/", selection: str = "", confirm: bool = False
@@ -622,6 +610,7 @@ def register(
             return await delete_lab(await get_client(), name, search_path, selection, confirm)
 
     if enabled("get_lab_topology"):
+
         @mcp.tool(name="get_lab_topology")
         async def _get_lab_topology(lab_path: str) -> dict[str, Any]:
             """Get the full node/network connection topology of a lab.
@@ -632,6 +621,7 @@ def register(
             return await get_lab_topology(await get_client(), lab_path)
 
     if enabled("get_lab_links"):
+
         @mcp.tool(name="get_lab_links")
         async def _get_lab_links(lab_path: str) -> dict[str, Any]:
             """Get all ethernet/serial endpoints available in a lab (useful before wiring nodes).
@@ -642,6 +632,7 @@ def register(
             return await get_lab_links(await get_client(), lab_path)
 
     if enabled("list_lab_pictures"):
+
         @mcp.tool(name="list_lab_pictures")
         async def _list_lab_pictures(lab_path: str, picture_id: int | None = None) -> dict[str, Any]:
             """List background pictures/annotations placed in a lab, or get one by id.
@@ -653,6 +644,7 @@ def register(
             return await list_lab_pictures(await get_client(), lab_path, picture_id)
 
     if enabled("list_labs"):
+
         @mcp.tool(name="list_labs")
         async def _list_labs(path: str = "/", search: str = "") -> dict[str, Any]:
             """Recursively list every lab under `path` (default: the whole server).

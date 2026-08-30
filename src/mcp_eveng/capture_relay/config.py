@@ -43,9 +43,7 @@ class CaptureSSHSettings(BaseSettings):
 
     ssh_host: str = Field(..., description="EVE-NG host to SSH into for docker ps/exec.")
     ssh_port: int = Field(default=22, description="SSH port on the EVE-NG host.")
-    ssh_username: str = Field(
-        ..., description="OS account scoped (via sudoers) to docker ps/exec dumpcap only."
-    )
+    ssh_username: str = Field(..., description="OS account scoped (via sudoers) to docker ps/exec dumpcap only.")
     ssh_key_path: str = Field(
         ..., description="Path to this account's private key. Key-based auth only -- no password option."
     )
@@ -118,7 +116,7 @@ def get_capture_ssh_settings() -> CaptureSSHSettings:
 
 @lru_cache
 def get_relay_listen_settings() -> RelayListenSettings:
-    return RelayListenSettings()  # type: ignore[call-arg]
+    return RelayListenSettings()
 
 
 @lru_cache
