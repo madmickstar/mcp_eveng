@@ -5,6 +5,42 @@ each tool's behavior — moved out of the main README to keep that focused
 on getting started. See the README's "Available tools" section for the
 full tool list and a one-line description of each.
 
+## Sessions and relogin
+
+EVE-NG only allows **one active session per user account** — confirmed
+against EVE-NG's own official documentation: "each user can login from a
+single location only. If the same user login twice, the second login
+disable the first one." If the account this server logs in as (via
+`EVENG_USERNAME`/`EVENG_PASSWORD`) is the same account used elsewhere at
+the same time — the EVE-NG GUI, a separate script, another instance of
+this server — whichever logs in most recently silently invalidates every
+other session, including this one.
+
+This is confirmed to actually happen, not just a documented possibility —
+traced via a timestamped EVE-NG server audit log (`api.txt`) showing a
+`stop` request failing with `400` in the exact same second as a second
+login to the same account. What that log also revealed: the invalidated
+session did **not** come back self-identifying as an auth problem — no
+`status: "unauthorized"` in the response body, just a bare `400` with a
+generic `"fail"` status and EVE-NG's generic `"Request not valid"`
+message, indistinguishable at the JSON level from any other validation
+failure. An earlier version of this project's relogin check looked for
+the documented `status: "unauthorized"` marker and missed this exact case
+because of that gap between documented and observed behavior.
+
+`EvengClient` now retries once, transparently, on **any** `400` or `401`
+response — trusting the HTTP status code alone, not the response body.
+The trade-off, accepted deliberately: a genuine validation failure
+unrelated to auth (e.g. an invalid template name) also gets one wasted
+relogin-retry under this broader check, since relogging in obviously
+doesn't fix bad parameters — but it reproduces the identical final error
+either way, just with one extra round-trip. That's a better trade than
+silently missing real session invalidation, which is now confirmed to
+happen in exactly the shared-account workflow described above.
+
+If you're troubleshooting something similar, using a separate, dedicated
+account for this server (rather than sharing your own login) rules this
+class of issue out entirely.
 
 †-marked tools are disabled by default — see "Controlling which tools are
 exposed" in the main README.
