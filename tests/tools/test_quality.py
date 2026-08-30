@@ -352,3 +352,214 @@ async def test_set_link_quality_errors_on_unknown_interface_name() -> None:
 
     assert result["status"] == "error"
     assert "Gi9/9" in result["message"]
+
+
+# ============================================================================
+# get_link_quality
+# ============================================================================
+
+
+GET_QUALITY_TOPOLOGY = [
+    {
+        "type": "ethernet",
+        "source": "node48",
+        "source_type": "node",
+        "source_label": "Gi0/1",
+        "destination": "node36",
+        "destination_type": "node",
+        "destination_label": "Gi2",
+        "network_id": 1,
+        "source_delay": 11,
+        "source_jitter": 12,
+        "source_loss": 13,
+        "source_bandwidth": 14,
+        "destination_delay": 21,
+        "destination_jitter": 22,
+        "destination_loss": 23,
+        "destination_bandwidth": 24,
+    }
+]
+
+GET_QUALITY_NODE_TO_NETWORK_TOPOLOGY = [
+    {
+        "type": "ethernet",
+        "source": "node39",
+        "source_type": "node",
+        "source_label": "e1",
+        "destination": "network10",
+        "destination_type": "network",
+        "destination_label": "",
+        "source_delay": 5,
+        "source_jitter": 6,
+        "source_loss": 7,
+        "source_bandwidth": 8,
+    }
+]
+
+
+async def test_get_link_quality_refuses_on_community() -> None:
+    client = make_client(get_status=COMMUNITY_STATUS)
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi0/1")
+
+    assert result["status"] == "error"
+    assert "Community" in result["message"]
+    client.get_lab_topology.assert_not_awaited()
+
+
+async def test_get_link_quality_requires_exactly_one_of_node_id_or_node_name() -> None:
+    client = make_client(get_status=PRO_STATUS)
+
+    neither = await quality.get_link_quality(client, "/Lab 1.unl", interface="Gi0/1")
+    both = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, node_name="foo", interface="Gi0/1")
+
+    assert neither["status"] == "error"
+    assert both["status"] == "error"
+
+
+async def test_get_link_quality_node_to_node_reads_both_sides() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_TOPOLOGY},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi0/1")
+
+    assert result["status"] == "success"
+    near = result["data"]["near"]
+    far = result["data"]["far"]
+    assert near == {
+        "node_id": 48,
+        "interface": "Gi0/1",
+        "delay": 11,
+        "jitter": 12,
+        "loss": 13,
+        "bandwidth": 14,
+        "settable": True,
+    }
+    assert far == {
+        "node_id": 36,
+        "interface": "Gi2",
+        "delay": 21,
+        "jitter": 22,
+        "loss": 23,
+        "bandwidth": 24,
+        "settable": True,
+    }
+
+
+async def test_get_link_quality_by_numeric_interface_index() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_TOPOLOGY},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, interface="1")
+
+    assert result["status"] == "success"
+    assert result["data"]["near"]["interface"] == "Gi0/1"
+
+
+async def test_get_link_quality_node_to_network_reports_settable_false_and_zero() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_NODE_TO_NETWORK_TOPOLOGY},
+        list_lab_networks={"status": "success", "data": {"id": 10, "name": "Bridge1", "type": "bridge"}},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("e0", "e1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=39, interface="e1")
+
+    assert result["status"] == "success"
+    near = result["data"]["near"]
+    far = result["data"]["far"]
+    assert near["settable"] is True
+    assert near["delay"] == 5
+    assert far["settable"] is False
+    assert far["delay"] == 0 and far["jitter"] == 0 and far["loss"] == 0 and far["bandwidth"] == 0
+    assert far["network"] == "Bridge1"
+    client.list_lab_networks.assert_awaited_once_with("/Lab 1.unl", 10)
+
+
+async def test_get_link_quality_node_to_network_falls_back_to_token_if_name_unavailable() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_NODE_TO_NETWORK_TOPOLOGY},
+        list_lab_networks={"status": "error", "data": None},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("e0", "e1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=39, interface="e1")
+
+    assert result["status"] == "success"
+    assert result["data"]["far"]["network"] == "network10"
+
+
+async def test_get_link_quality_by_node_name_single_match() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_TOPOLOGY},
+        list_lab_nodes={"status": "success", "data": {"48": {"id": 48, "name": "R1-Core"}}},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_name="core", interface="Gi0/1")
+
+    assert result["status"] == "success"
+    assert result["data"]["near"]["node_id"] == 48
+
+
+async def test_get_link_quality_by_node_name_no_match() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        list_lab_nodes={"status": "success", "data": {"48": {"id": 48, "name": "R1-Core"}}},
+    )
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_name="nonexistent", interface="Gi0/1")
+
+    assert result["status"] == "error"
+    assert "No node matches" in result["message"]
+
+
+async def test_get_link_quality_by_node_name_multiple_matches_needs_selection() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        list_lab_nodes={
+            "status": "success",
+            "data": {
+                "48": {"id": 48, "name": "R1-Core"},
+                "49": {"id": 49, "name": "R2-Core"},
+            },
+        },
+    )
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_name="core", interface="Gi0/1")
+
+    assert result["status"] == "selection_required"
+    assert len(result["data"]["matches"]) == 2
+    client.get_lab_topology.assert_not_awaited()
+
+
+async def test_get_link_quality_errors_when_interface_not_connected() -> None:
+    client = make_client(
+        get_status=PRO_STATUS,
+        get_lab_topology={"status": "success", "data": GET_QUALITY_TOPOLOGY},
+    )
+    client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1", "Gi0/2")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi0/2")
+
+    assert result["status"] == "error"
+    assert "No existing connection" in result["message"]
+
+
+async def test_get_link_quality_errors_on_unknown_interface_name() -> None:
+    client = make_client(get_status=PRO_STATUS)
+    client.get_node_interfaces.return_value = node_interfaces("Gi0/0", "Gi0/1")
+
+    result = await quality.get_link_quality(client, "/Lab 1.unl", node_id=48, interface="Gi9/9")
+
+    assert result["status"] == "error"
+    assert "Gi9/9" in result["message"]

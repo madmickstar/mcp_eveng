@@ -117,29 +117,30 @@ def test_tools_env_comm_example_lists_user_management_tools_same_as_pro() -> Non
         assert comm_raw[tool] == pro_raw[tool] == "disabled"
 
 
-def test_tools_env_comm_example_has_full_parity_with_pro_except_three_tools() -> None:
+def test_tools_env_comm_example_has_full_parity_with_pro_except_four_tools() -> None:
     # The two files must list exactly the same set of tools -- Community
     # only differs from PRO in *values*, never in which tools are even
-    # mentioned, except for export_node/share_lab/set_link_quality, which
-    # can't be safely omitted the way a _DEFAULT_DISABLED tool could: none
-    # of the three is in that set, so omitting their lines would make them
-    # enabled by default -- the opposite of intended -- so they're the only
-    # three genuinely edition-gated lines in the file.
+    # mentioned, except for export_node/share_lab/set_link_quality/
+    # get_link_quality, which can't be safely omitted the way a
+    # _DEFAULT_DISABLED tool could: none of the four is in that set, so
+    # omitting their lines would make them enabled by default -- the
+    # opposite of intended -- so they're the only four genuinely
+    # edition-gated lines in the file.
     pro_raw = dotenv_values(_REPO_ROOT / "tools.env.pro.example")
     comm_raw = dotenv_values(_REPO_ROOT / "tools.env.comm.example")
 
     assert set(pro_raw.keys()) == set(comm_raw.keys())
     differing = {k for k in pro_raw if pro_raw[k] != comm_raw[k]}
-    assert differing == {"export_node", "share_lab", "set_link_quality"}
+    assert differing == {"export_node", "share_lab", "set_link_quality", "get_link_quality"}
 
 
-def test_tools_env_comm_example_disables_exactly_twelve_tools() -> None:
+def test_tools_env_comm_example_disables_exactly_thirteen_tools() -> None:
     # End-to-end functional check via make_enabled_predicate (what
     # actually gets registered), not just individual assertions: exactly
     # the six user-management tools plus
-    # export_node/share_lab/set_link_quality/delete_lab/list_captures/
-    # get_capture should be unavailable on Community; everything else
-    # should be enabled.
+    # export_node/share_lab/set_link_quality/get_link_quality/delete_lab/
+    # list_captures/get_capture should be unavailable on Community;
+    # everything else should be enabled.
     status = load_tool_status(_REPO_ROOT / "tools.env.comm.example")
     enabled = make_enabled_predicate(status)
 
@@ -187,6 +188,7 @@ def test_tools_env_comm_example_disables_exactly_twelve_tools() -> None:
         "wipe_node",
         "export_node",
         "set_link_quality",
+        "get_link_quality",
         "telnet_node",
         "list_captures",
         "get_capture",
@@ -202,6 +204,7 @@ def test_tools_env_comm_example_disables_exactly_twelve_tools() -> None:
         "share_lab",
         "export_node",
         "set_link_quality",
+        "get_link_quality",
         "delete_lab",
         "list_captures",
         "get_capture",
