@@ -153,6 +153,207 @@ def _endpoint_value(token: Any, token_type: Any) -> str:
     return text
 
 
+async def _search_nodes_by_name(client: EvengClient, lab_path: str, name: str) -> list[dict[str, Any]]:
+    """Case-insensitive substring match against every node's name, sorted
+    by id. Mirrors `tools/nodes.py`'s helper of the same name -- kept as
+    its own copy here rather than a cross-module import of another
+    module's private helper."""
+    result = await client.list_lab_nodes(lab_path)
+    data = result.get("data") or {}
+    matches: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        needle = name.strip().lower()
+        for node in data.values():
+            if isinstance(node, dict) and needle in str(node.get("name", "")).strip().lower():
+                matches.append(node)
+    matches.sort(key=lambda n: int(n.get("id", n.get("_key", 0)) or 0))
+    return matches
+
+
+def _quality_value(raw: Any) -> int:
+    return int(raw or 0)
+
+
+async def get_link_quality(
+    client: EvengClient,
+    lab_path: str,
+    node_id: int | None = None,
+    node_name: str | None = None,
+    interface: str = "",
+) -> dict[str, Any]:
+    """Get the current link-quality (delay/jitter/packet loss/bandwidth)
+    on both sides of an existing connection -- the given node's
+    interface, and whatever's connected to the opposite end, resolved
+    automatically. PRO/Corporate only.
+
+    Args:
+        lab_path: Full path to the .unl lab file.
+        node_id: The node on the side you want to read. Exactly one of
+            node_id/node_name is required.
+        node_name: Case-insensitive substring match against node names,
+            if you don't already know the numeric id. Exactly one of
+            node_id/node_name is required.
+        interface: That node's interface name (e.g. "Gi0/1") or 0-based
+            index -- must already be connected.
+    """
+    status_result = await client.get_status()
+    status_data = status_result.get("data") if isinstance(status_result, dict) else None
+    if not is_pro_edition(status_data if isinstance(status_data, dict) else {}):
+        return {
+            "status": "error",
+            "message": (
+                "Link quality (delay/jitter/packet loss/bandwidth per connection) "
+                "is a PRO/Corporate-only EVE-NG feature, not available on "
+                "Community at all. This server is running Community edition, "
+                "so get_link_quality isn't available here."
+            ),
+        }
+
+    if (node_id is None) == (node_name is None):
+        return {
+            "status": "error",
+            "message": "Specify exactly one of node_id or node_name, not both or neither.",
+        }
+
+    if node_id is None:
+        assert node_name is not None
+        matches = await _search_nodes_by_name(client, lab_path, node_name)
+        if not matches:
+            return {"status": "error", "message": f"No node matches {node_name!r}."}
+        if len(matches) > 1:
+            return {
+                "status": "selection_required",
+                "message": f"{len(matches)} node(s) match {node_name!r} -- use node_id instead.",
+                "data": {"matches": [f"{n.get('name', '?')} (id {n.get('id', n.get('_key', '?'))})" for n in matches]},
+            }
+        raw_id = matches[0].get("id", matches[0].get("_key"))
+        if raw_id is None:
+            raise ValueError(f"node record has neither 'id' nor '_key': {matches[0]!r}")
+        node_id = int(raw_id)
+
+    interfaces_result = await client.get_node_interfaces(lab_path, node_id)
+    interfaces_data = interfaces_result.get("data")
+    if not isinstance(interfaces_data, dict):
+        interfaces_data = {}
+
+    text = str(interface).strip()
+    if text.isdigit():
+        index_candidate = int(text)
+        ethernet = interfaces_data.get("ethernet")
+        near_label = None
+        if isinstance(ethernet, list) and 0 <= index_candidate < len(ethernet):
+            iface = ethernet[index_candidate]
+            if isinstance(iface, dict):
+                near_label = str(iface.get("name", ""))
+        if near_label is None:
+            return {"status": "error", "message": f"interface index {index_candidate} not found on node {node_id}"}
+    else:
+        near_label = text
+        if _find_interface_index(interfaces_data, text) is None:
+            return {"status": "error", "message": f"No interface named {text!r} found on node {node_id}."}
+
+    topo_result = await client.get_lab_topology(lab_path)
+    topology = topo_result.get("data")
+    if not isinstance(topology, list):
+        topology = []
+
+    entry = _find_connection(topology, node_id, near_label)
+    if entry is None:
+        return {
+            "status": "error",
+            "message": (
+                f"No existing connection found for node {node_id} interface "
+                f"{near_label!r} -- link quality only applies to an "
+                "already-connected interface."
+            ),
+        }
+
+    node_token = f"node{node_id}"
+    near_is_source = entry.get("source_type") == "node" and entry.get("source") == node_token
+
+    near_raw = (
+        (entry.get("source_delay"), entry.get("source_jitter"), entry.get("source_loss"), entry.get("source_bandwidth"))
+        if near_is_source
+        else (
+            entry.get("destination_delay"),
+            entry.get("destination_jitter"),
+            entry.get("destination_loss"),
+            entry.get("destination_bandwidth"),
+        )
+    )
+    near_data: dict[str, Any] = {
+        "node_id": node_id,
+        "interface": near_label,
+        "delay": _quality_value(near_raw[0]),
+        "jitter": _quality_value(near_raw[1]),
+        "loss": _quality_value(near_raw[2]),
+        "bandwidth": _quality_value(near_raw[3]),
+        "settable": True,
+    }
+
+    far_type = entry.get("destination_type") if near_is_source else entry.get("source_type")
+    far_token_raw = str(entry.get("destination") if near_is_source else entry.get("source"))
+    far_label = str(entry.get("destination_label", "") if near_is_source else entry.get("source_label", ""))
+    far_is_network = far_type == "network"
+
+    far_data: dict[str, Any]
+    if far_is_network:
+        network_name = far_token_raw
+        network_id_str = far_token_raw.removeprefix("network")
+        if network_id_str.isdigit():
+            net_result = await client.list_lab_networks(lab_path, int(network_id_str))
+            net_data = net_result.get("data")
+            if isinstance(net_data, dict):
+                # Single-resource fetches are usually already flat; defensively
+                # unwrap a possible {"<id>": {...}} shape too.
+                if "name" not in net_data and len(net_data) == 1:
+                    net_data = next(iter(net_data.values()), {})
+                if isinstance(net_data, dict) and net_data.get("name"):
+                    network_name = str(net_data["name"])
+        far_data = {
+            "network": network_name,
+            "network_token": far_token_raw,
+            "delay": 0,
+            "jitter": 0,
+            "loss": 0,
+            "bandwidth": 0,
+            "settable": False,
+            "note": "Network-attached -- quality is fixed at 0 and cannot be changed (confirmed live).",
+        }
+    else:
+        far_node_id = int(far_token_raw.removeprefix("node"))
+        far_raw = (
+            (
+                entry.get("destination_delay"),
+                entry.get("destination_jitter"),
+                entry.get("destination_loss"),
+                entry.get("destination_bandwidth"),
+            )
+            if near_is_source
+            else (
+                entry.get("source_delay"),
+                entry.get("source_jitter"),
+                entry.get("source_loss"),
+                entry.get("source_bandwidth"),
+            )
+        )
+        far_data = {
+            "node_id": far_node_id,
+            "interface": far_label,
+            "delay": _quality_value(far_raw[0]),
+            "jitter": _quality_value(far_raw[1]),
+            "loss": _quality_value(far_raw[2]),
+            "bandwidth": _quality_value(far_raw[3]),
+            "settable": True,
+        }
+
+    return {
+        "status": "success",
+        "message": f"Link quality for node {node_id} interface {near_label!r}.",
+        "data": {"near": near_data, "far": far_data},
+    }
+
+
 async def set_link_quality(
     client: EvengClient,
     lab_path: str,
@@ -363,6 +564,38 @@ async def set_link_quality(
 
 
 def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
+    if enabled("get_link_quality"):
+
+        @mcp.tool(name="get_link_quality")
+        async def _get_link_quality(
+            lab_path: str,
+            node_id: int | None = None,
+            node_name: str | None = None,
+            interface: str = "",
+        ) -> dict[str, Any]:
+            """Get current link-quality (delay/jitter/packet loss/
+            bandwidth) on both sides of an existing connection -- the
+            given node's interface, and whatever's on the opposite end,
+            resolved automatically. PRO/Corporate only.
+
+            Args:
+                lab_path: Full path to the .unl lab file.
+                node_id: The node on the side you want to read. Exactly
+                    one of node_id/node_name is required.
+                node_name: Case-insensitive substring match against node
+                    names, if you don't already know the numeric id.
+                    Exactly one of node_id/node_name is required.
+                interface: That node's interface name (e.g. "Gi0/1") or
+                    0-based index -- must already be connected.
+            """
+            return await get_link_quality(
+                await get_client(),
+                lab_path,
+                node_id=node_id,
+                node_name=node_name,
+                interface=interface,
+            )
+
     if enabled("set_link_quality"):
 
         @mcp.tool(name="set_link_quality")

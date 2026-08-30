@@ -64,6 +64,22 @@ async def test_not_found_raises_not_found_error(client: EvengClient, base_url: s
 
 
 async def test_generic_api_error(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
+    # The client's own relogin-on-400 behavior (see client.py's _request,
+    # and docs/tools-reference.md's "Sessions and relogin" note) means
+    # a genuine validation failure still triggers one login attempt +
+    # retry before the error is finally raised, not a single request --
+    # this test mocks that full sequence rather than assuming one call.
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{base_url}/labs",
+        status_code=400,
+        json={"code": 400, "status": "fail", "message": "Bad request"},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{base_url}/auth/login",
+        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+    )
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/labs",

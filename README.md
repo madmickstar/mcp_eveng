@@ -16,20 +16,22 @@ folders and users — all through the EVENG REST API.
 
 - [Features](#features)
 - [Installation](#installation)
+- [Upgrading](#upgrading)
 - [Capture relay](#capture-relay)
-- [Choosing a transport](#choosing-a-transport)
-- [A note on sessions and relogin](#a-note-on-sessions-and-relogin)
-- [PRO vs Community differences](#pro-vs-community-differences)
+- [Run App](#run-app)
 - [Configuration](#configuration)
   - [EVENG connection](#eveng-connection-always-used-regardless-of-transport)
   - [MCP network settings](#mcp-network-settings-only-used-with---sse-or---http)
     - [`MCP_LOG_LEVEL`](#mcp_log_level-options-and-where-logs-go)
     - [`MCP_ALLOWED_HOSTS`](#mcp_allowed_hosts-dns-rebinding-protection)
     - [`MCP_STATEFUL`](#mcp_stateful-session-persistence-across-restarts)
-- [Available tools](#available-tools)
-- [Controlling which tools are exposed](#controlling-which-tools-are-exposed)
+- [EVE-NG Pro vs Community MCP tools](#eve-ng-pro-vs-community-mcp-tools)
+- [Available MCP tools](#available-mcp-tools)
+- [Controlling which MCP tools are exposed](#controlling-which-mcp-tools-are-exposed)
 - [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
+- [Manual curl commands](#manual-curl-commands)
+- [A note on sessions and relogin](#a-note-on-sessions-and-relogin)
 - [Known issues](#known-issues)
 - [Development](#development)
   - [Why `mcp` is pinned below `2.0`](#why-mcp-is-pinned-below-20)
@@ -41,7 +43,8 @@ folders and users — all through the EVENG REST API.
 
 - All three MCP transports: `stdio`, `--sse`, `--http`
 - Full coverage of the EVE-NG REST API
-- 46 tools
+- 47 tools to manage your EVE-NG labs
+- Bulk edits across many nodes at once
 - Stream Wireshark captures to a local Wireshark
 - Adjust link quality settings
 - Supports both Community and PRO editions
@@ -60,6 +63,11 @@ pip install -e .
 - **[Linux / macOS install & running guide](docs/install-linux.md)**
 - **[Windows install & running guide](docs/install-windows.md)**
 
+## Upgrading
+
+**[Upgrading guide](docs/upgrading.md)** — updating an existing
+`mcp-eveng` and/or `mcp-relay` install.
+
 ## Capture relay
 
 PRO/Corporate only. Streams an EVE-NG PRO Wireshark capture to a local
@@ -67,108 +75,16 @@ Wireshark without a personal SSH+sudo account on the EVE-NG host.
 
 **[Capture relay guide](docs/capture-relay.md)**
 
-## Choosing a transport
+## Run App
 
-Transport is a **CLI flag**, not an environment variable: no flag runs
-`stdio` (default, used when an MCP host launches the server as a
-subprocess), `--sse` runs the legacy SSE transport, `--http` runs
-Streamable HTTP (recommended for networked deployments). `--sse` and
-`--http` are mutually exclusive. See the OS-specific guides above for the
-exact commands and Claude Desktop JSON configuration for each.
+```bash
+python -m mcp_eveng          # stdio mode (default)
+python -m mcp_eveng --sse    # sse mode
+python -m mcp_eveng --http   # streamable-http mode
+```
 
-- **stdio** (no flag): the MCP host supplies configuration directly in
-  its own `env` block. No `.env` file or `MCP_*` variable is needed in
-  this mode at all.
-- **`--sse` / `--http`**: you run the process yourself as a standalone
-  network service, so you'll typically want a `.env` file for both the
-  `EVENG_*` connection settings and the `MCP_*` network settings below.
-
-## A note on sessions and relogin
-
-EVE-NG only allows one active session per user account — see
-[docs/tools-reference.md](docs/tools-reference.md#sessions-and-relogin)
-for what that means in practice and how `EvengClient` handles it.
-
-## PRO vs Community differences
-
-EVE-NG's REST API has no explicit "edition" field, but the version string
-`get_status` returns carries a `-PRO` suffix on Professional/Corporate/
-Learning Center tiers (confirmed live: `6.5.0-27-PRO`); plain Community
-builds don't have it (confirmed live: `6.2.0-4`). This is the only
-reliable signal for which edition a server is running, and it's what
-every edition-aware behavior below derives from (`edition.is_pro_edition`).
-An unrecognized or missing version string is treated as Community, the
-more conservative assumption.
-
-Five tools genuinely behave differently by edition — confirmed against
-EVE-NG's own official [features-compare page](https://www.eve-ng.net/index.php/features-compare/),
-live testing, or both:
-
-- **`connect_interface`**: PRO allows wiring interfaces on running nodes;
-  Community requires every node involved stopped first. This tool checks
-  automatically and, on Community only, stops any running node(s)
-  involved before wiring them — you don't need to handle this yourself.
-- **`export_node`**: listed on the official comparison page as a separate
-  toggleable feature ("Export/Import configs or config packs to local
-  PC"). Confirmed live: fails unconditionally on Community — across
-  multiple node types, running and stopped, with and without a saved
-  startup config — while the identical request shape works normally for
-  `start_node`/`stop_node`/`wipe_node` on the same server. This tool
-  checks edition first and returns a clear error immediately on
-  Community, rather than the generic `"Request not valid"` EVE-NG itself
-  gives no useful detail on.
-- **`share_lab`**: listed on the official comparison page as two separate
-  toggleable features ("Shared Lab", "Shared Project"). Confirmed live on
-  Community: `get_lab` never returns a `shared` key at all, and
-  attempting to actually add a share fails with `"Lab has not been
-  modified"` — the request is silently accepted with no effect. Confirmed
-  directly (Community user, not from the official docs): there's no
-  per-lab sharing concept to toggle in the first place — all labs are
-  shared by default. This tool checks edition first and returns a clear
-  error immediately, before wasting a search/select round-trip on a
-  feature that would fail anyway.
-- **`set_link_quality`**: per-connection delay/jitter/packet-loss/bandwidth,
-  set independently on each side. Unlike the three tools above, this
-  isn't a restricted version of a shared feature — it has no Community
-  equivalent at all (confirmed directly by a user: no GUI option exists
-  there), and there's no open-source Community-side code to cross-check
-  against either. There's no documented public API for it — EVE-NG's own
-  API docs don't cover it, and PRO's backend is closed-source — so the
-  request shape in `tools/quality.py` was captured live from a real PRO
-  server's own GUI network traffic, not inferred. One confirmed
-  restriction: a side attached to a network of any kind (not just a
-  literal bridge) can't have its quality set at all — EVE-NG forces it
-  to 0 regardless of what's requested. The far side's current values are
-  read automatically from `get_lab_topology` (confirmed live that a PRO
-  server's response includes them) rather than needing to be supplied
-  explicitly.
-- **`list_captures`/`get_capture`**: EVE-NG PRO forces Wireshark captures
-  into an embedded Guacamole session rather than Community's
-  browser-protocol-handler handoff to a local Wireshark. These tools
-  (plus a standalone relay service and a Windows `.bat` companion) let a
-  PRO capture stream to a local Wireshark without a personal SSH+sudo
-  account on the EVE-NG host — PRO/Corporate only, no Community
-  equivalent needed, and disabled by default even on PRO until the
-  supporting infrastructure is set up. See
-  [docs/capture-relay.md](docs/capture-relay.md) for setup.
-
-The six user-management tools (`list_users`, `get_user`, `add_user`,
-`edit_user`, `delete_user`, `list_user_roles`) are **not** edition-gated —
-confirmed via direct manual testing against a real Community server
-(adding a second admin user) that user management works normally there.
-They're disabled by default on both editions in `tools.env.comm.example`/
-`tools.env.pro.example` alike, for the same general reason (not exposing
-user administration to an LLM by default), not because Community can't
-support it — see "Controlling which tools are exposed" below. An earlier
-version of this section (and of `tools.env.comm.example`) assumed user
-management was Community-unsupported and omitted these tools entirely;
-that assumption was wrong and has been corrected.
-
-A few other confirmed differences worth being aware of, per the same
-official comparison page, though nothing in this project currently
-adjusts behavior for them: node limit per lab (63 on Community vs 1024 on
-PRO/Corporate), and TCP port allocation (fixed 128 per POD on Community
-vs dynamic 1–65000 on PRO/Corporate).
+`--sse` and `--http` rely on variables configured in your `.env` file —
+see `.env.example`.
 
 ## Configuration
 
@@ -213,7 +129,7 @@ precedence over `.env`.
 `MCP_TOOLS_CONFIG_PATH` (default `tools.env`) applies to **every**
 transport, including stdio — it isn't scoped to `--sse`/`--http` like the
 rest of this table, since tool registration itself doesn't depend on
-transport. See "Controlling which tools are exposed" below.
+transport. See "Controlling which MCP tools are exposed" below.
 
 #### `MCP_LOG_LEVEL`: options and where logs go
 
@@ -265,7 +181,28 @@ JSON differ enough between platforms (path syntax, shell env-var syntax,
 and how each OS handles `PATH` for GUI-launched subprocesses) that they're
 kept there rather than duplicated here.
 
-## Available tools
+## EVE-NG Pro vs Community MCP tools
+
+EVE-NG's REST API has no explicit "edition" field, but the version string
+`get_status` returns carries a `-PRO` suffix on Professional/Corporate/
+Learning Center tiers (confirmed live: `6.5.0-27-PRO`); plain Community
+builds don't have it (confirmed live: `6.2.0-4`). This is the only
+reliable signal for which edition a server is running, and it's what
+every edition-aware behavior below derives from (`edition.is_pro_edition`).
+An unrecognized or missing version string is treated as Community, the
+more conservative assumption.
+
+Five tools genuinely behave differently by edition — confirmed against
+EVE-NG's own official [features-compare page](https://www.eve-ng.net/index.php/features-compare/),
+live testing, or both:
+
+- `connect_interface` — Pro and Community versions both support this MCP tool. Community version requires nodes to be stopped; Pro does not.
+- `export_node` — Pro only.
+- `share_lab` — Pro only.
+- `set_link_quality` / `get_link_quality` — Pro only.
+- `list_captures` / `get_capture` — Pro only.
+
+## Available MCP tools
 
 Tool names have no prefix (`get_status`, not `eveng_get_status`) — be aware
 this means a name could collide with another MCP server's tool if you ever
@@ -316,11 +253,12 @@ connect more than one server with overlapping names to the same client.
 | | `wipe_node` | Wipes a node's saved configuration. |
 | | `export_node` | Exports a node's running configuration. |
 | | `set_link_quality` | Sets per-connection delay/jitter/packet-loss/bandwidth. PRO only. |
+| | `get_link_quality` | Gets current delay/jitter/packet-loss/bandwidth on both sides of a connection. PRO only. |
 | Live console access | `telnet_node` | Sends CLI commands to a running node's console over telnet. |
 | Capture relay | `list_captures` | Lists running Wireshark capture containers. PRO only, disabled by default. |
 | | `get_capture` | Mints a one-time URL to stream a capture to a local Wireshark. PRO only, disabled by default. |
 
-"Disabled by default" tools: see "Controlling which tools are exposed"
+"Disabled by default" tools: see "Controlling which MCP tools are exposed"
 below for how to turn them on. "Requires user confirmation" tools: see
 `docs/tools-reference.md` for the search → select → confirm flow they
 each go through before anything is deleted.
@@ -329,7 +267,7 @@ More detailed information about each tool — confirmed EVE-NG quirks,
 design reasoning, and non-obvious behavior — can be found in
 **[docs/tools-reference.md](docs/tools-reference.md)**.
 
-## Controlling which tools are exposed
+## Controlling which MCP tools are exposed
 
 Every tool can be individually enabled or disabled, via a dedicated
 dotenv-syntax config file — kept separate from the main `.env` so tool
@@ -347,8 +285,9 @@ list_users=disabled
 The two example files list exactly the same tools — full parity, nothing
 omitted from either — and differ only in the *value* of two lines:
 `export_node`/`share_lab` are `enabled` in the PRO file and `disabled` in
-the Community one, since both are PRO/Corporate-only features (see "PRO
-vs Community differences" above) with nothing useful to do on Community.
+the Community one, since both are PRO/Corporate-only features (see
+"EVE-NG Pro vs Community MCP tools" above) with nothing useful to do on
+Community.
 Everything else, including the six user-management tools, is listed
 identically in both files: confirmed via direct manual testing against a
 real Community server (adding a second admin user; adding a folder and
@@ -391,7 +330,7 @@ mcp-eveng/
 │   ├── config.py        # pydantic-settings, reads .env
 │   ├── confirmation.py  # shared search/select/confirm state machine for deletes
 │   ├── dependencies.py  # shared client singleton
-│   ├── edition.py         # PRO vs Community detection, shared by 3 edition-gated tools
+│   ├── edition.py         # PRO vs Community detection, shared by all edition-gated tools
 │   ├── exceptions.py
 │   ├── search.py         # case-insensitive record search (used by delete tools)
 │   ├── telnet.py          # raw asyncio telnet client (IAC handling) for telnet_node
@@ -417,7 +356,7 @@ mcp-eveng/
 ├── docs/
 │   ├── install-linux.md    # Linux/macOS install, running, Claude Desktop JSON
 │   ├── install-windows.md  # Windows install, running, Claude Desktop JSON
-│   └── tools-reference.md  # detailed per-tool design notes (see "Available tools")
+│   └── tools-reference.md  # detailed per-tool design notes (see "Available MCP tools")
 ├── tools.env.pro.example   # per-tool enable/disable config, PRO/Corporate -- copy to tools.env
 ├── tools.env.comm.example  # same, Community edition (disables 2 PRO-only tools)
 └── .github/workflows/      # CI + PyPI publish
@@ -454,6 +393,17 @@ self-referential `lifespan` field type that it never calls
 field from the environment) and `mcp-eveng` suppresses it by default — if
 you still see it, you're likely on an `mcp` version where the warning text
 changed slightly; it's safe to ignore either way.
+
+## Manual curl commands
+
+Test the server directly over HTTP without an MCP client — useful for
+quick troubleshooting. **[Manual curl commands guide](docs/manual-curl-commands.md)**.
+
+## A note on sessions and relogin
+
+EVE-NG only allows one active session per user account — see
+[docs/tools-reference.md](docs/tools-reference.md#sessions-and-relogin)
+for what that means in practice and how `EvengClient` handles it.
 
 ## Known issues
 
@@ -509,5 +459,5 @@ against live, confirmed via each server's own `get_status` response:
 
 Other versions of either edition likely work too — nothing in this
 project depends on a specific point release beyond the documented
-edition differences (see "PRO vs Community differences") — but these are
+edition differences (see "EVE-NG Pro vs Community MCP tools") — but these are
 the two actually confirmed.

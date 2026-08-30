@@ -8,12 +8,14 @@ own GUI already generates working `capture://` links.
 
 - [Architecture](#architecture)
 - [1. Create the account + group (EVE-NG host)](#1-create-the-account--group-eve-ng-host)
-- [2. Generate a keypair (client machine)](#2-generate-a-keypair-client-machine)
-- [3. Sudoers](#3-sudoers)
-- [4. Configure two SEPARATE `.env` files](#4-configure-two-separate-env-files)
-- [5. Install and run the relay](#5-install-and-run-the-relay)
-- [6. Enable the tools on the main mcp-eveng process](#6-enable-the-tools-on-the-main-mcp-eveng-process)
-- [7. The `.bat` companion and Windows registration](#7-the-bat-companion-and-windows-registration)
+- [2. Generate a key pair (MCP Server)](#2-generate-a-key-pair-mcp-server)
+- [3. Append the public key (EVE-NG host)](#3-append-the-public-key-eve-ng-host)
+- [4. Sudoers (EVE-NG host)](#4-sudoers-eve-ng-host)
+- [5. Install and config mcp-relay App (MCP server)](#5-install-and-config-mcp-relay-app-mcp-server)
+- [6. Install and config mcp-eveng App (MCP server)](#6-install-and-config-mcp-eveng-app-mcp-server)
+- [7. Create and start the systemd service](#7-create-and-start-the-systemd-service)
+- [8. Enable the tools on the main mcp-eveng process](#8-enable-the-tools-on-the-main-mcp-eveng-process)
+- [9. The `.bat` companion and Windows registration](#9-the-bat-companion-and-windows-registration)
 - [Known limitations](#known-limitations)
 
 ## Architecture
@@ -49,7 +51,7 @@ sudo groupadd capture_relay
 sudo useradd --system --create-home --shell /bin/bash --groups capture_relay mcp-eveng
 ```
 
-## 2. Generate a keypair (client machine)
+## 2. Generate a key pair (MCP Server)
 
 Not on the EVE-NG host — on whichever machine(s) run `mcp-eveng`/`mcp-relay`.
 
@@ -57,12 +59,6 @@ Linux/macOS:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/mcp-eveng-capture -N ""
-```
-
-Windows (PowerShell):
-
-```powershell
-ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\mcp-eveng-capture -N '""'
 ```
 
 If the local account has no home directory:
@@ -75,7 +71,26 @@ sudo -u mcp-eveng ssh-keygen -t ed25519 -f /home/mcp-eveng/.ssh/mcp-eveng-captur
 sudo chmod 600 /home/mcp-eveng/.ssh/mcp-eveng-capture
 ```
 
-Append the public key to the EVE-NG host account's `authorized_keys`:
+Windows (PowerShell):
+
+```powershell
+ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\mcp-eveng-capture -N '""'
+```
+
+PowerShell permission fix (private keys must not be readable by other
+local accounts):
+
+```powershell
+# 1. Remove inherited permissions from the file
+icacls "$env:USERPROFILE\.ssh\mcp-eveng-capture" /inheritance:r
+# 2. Grant explicit full control only to your active Windows username
+icacls "$env:USERPROFILE\.ssh\mcp-eveng-capture" /grant:r "$($env:USERNAME):F"
+# Alternative do to all files at same time
+icacls "$env:USERPROFILE\.ssh" /T /C /inheritance:r
+icacls "$env:USERPROFILE\.ssh" /T /C /grant:r "$($env:USERNAME):F"
+```
+
+## 3. Append the public key (EVE-NG host)
 
 ```bash
 sudo -u mcp-eveng bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "PASTE_THE_PUBLIC_KEY_LINE_HERE" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
@@ -85,7 +100,7 @@ One keypair covers both `mcp-eveng` and `mcp-relay` if they run on the
 same machine. Otherwise generate one per machine and append each
 public half to the same `authorized_keys` file.
 
-## 3. Sudoers
+## 4. Sudoers (EVE-NG host)
 
 `/etc/sudoers.d/capture_relay` (edit with `visudo -f`):
 
@@ -101,22 +116,13 @@ public half to the same `authorized_keys` file.
 Confirm `docker`/`tcpdump` paths match your host (`which docker`,
 `which tcpdump`) — sudoers matching is exact-path.
 
-## 4. Configure two SEPARATE `.env` files
-
-- **`.env.example`** (project root) → main `mcp-eveng` process's `.env`.
-- **`.env.capture-relay.example`** (project root) → the relay's own,
-  separate `.env`, in its own `WorkingDirectory` (e.g.
-  `/opt/mcp_relay/.env`).
-
-`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are identical in both.
-`CAPTURE_SSH_KEY_PATH` is a local path per machine — only identical if
-both processes run on the same machine. `CAPTURE_TOKEN_SECRET` **must
-be the exact same value** in both — generate once (`openssl rand -hex
-32`) and copy into both.
-
-## 5. Install and run the relay
+## 5. Install and config mcp-relay App (MCP server)
 
 ```bash
+sudo git clone https://github.com/madmickstar/mcp_eveng.git /opt/mcp_eveng
+# skip the line above if you already have /opt/mcp_eveng from
+# install-linux.md's systemd setup
+
 sudo mkdir -p /opt/mcp_relay
 cd /opt/mcp_relay
 sudo python3 -m venv .venv
@@ -124,11 +130,29 @@ sudo chown -R mcp-eveng:mcp-eveng /opt/mcp_relay
 sudo -u mcp-eveng /opt/mcp_relay/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
 ```
 
-Also install into the main process's venv:
+Copy **`.env.capture-relay.example`** (project root) to `/opt/mcp_relay/.env`
+and configure it.
+
+## 6. Install and config mcp-eveng App (MCP server)
 
 ```bash
 sudo -u mcp-eveng /opt/mcp_eveng/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
 ```
+
+This upgrades the existing `mcp-eveng` install to add the `[capture-relay]`
+extra (`asyncssh`) it needs for `list_captures`/`get_capture` to SSH into
+the EVE-NG host directly.
+
+Copy **`.env.example`** (project root) to the main `mcp-eveng` process's
+`.env` and configure it.
+
+`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are identical in both `.env`
+files. `CAPTURE_SSH_KEY_PATH` is a local path per machine — only
+identical if both processes run on the same machine.
+`CAPTURE_TOKEN_SECRET` **must be the exact same value** in both —
+generate once (`openssl rand -hex 32`) and copy into both.
+
+## 7. Create and start the systemd service
 
 ```bash
 sudo vi /etc/systemd/system/mcp-relay.service
@@ -175,7 +199,7 @@ sudo systemctl status mcp-relay.service
 sudo systemctl enable mcp-relay.service
 ```
 
-### Manual/interactive testing (any OS, including Windows)
+### Start app manually (any OS, including Windows)
 
 ```
 python -m mcp_eveng.capture_relay
@@ -185,7 +209,7 @@ or the installed console script directly: `mcp-eveng-capture-relay`.
 No `--http` flag — reads `CAPTURE_RELAY_LISTEN_HOST`/`_PORT` from
 `.env` in the current working directory.
 
-## 6. Enable the tools on the main mcp-eveng process
+## 8. Enable the tools on the main mcp-eveng process
 
 ```bash
 # in tools.env
@@ -193,7 +217,7 @@ list_captures=enabled
 get_capture=enabled
 ```
 
-## 7. The `.bat` companion and Windows registration
+## 9. The `.bat` companion and Windows registration
 
 Edit the top of `scripts/eve-capture.bat`:
 
@@ -206,7 +230,7 @@ set COMMUNITY_SSH_USER=eve-comm-user
 set COMMUNITY_SSH_KEY=%HOMEPATH%\.ssh\eve-comm.ppk
 ```
 
-`PRO_SSH_*` authenticates against the relay-fallback account (step 1/3).
+`PRO_SSH_*` authenticates against the relay-fallback account (step 1/4).
 `COMMUNITY_SSH_*` is your existing Community setup's account. Both
 default to key-based (`-i`, PuTTY `.ppk` format — convert an
 OpenSSH-format key with `puttygen` if needed); a commented-out
@@ -231,6 +255,9 @@ Windows Registry Editor Version 5.00
 
 Adjust the path to wherever `eve-capture.bat` lives, then import the
 `.reg` file (double-click it, or via `regedit`).
+
+See [Upgrading](upgrading.md) for updating an existing install of
+either app.
 
 ## Known limitations
 

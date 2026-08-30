@@ -109,3 +109,5 @@ Requires [Node.js](https://nodejs.org/) (for `npx`). Bridge through
 If `npx` isn't recognized, confirm Node.js added itself to `PATH` and
 that you've opened a new terminal/restarted Claude Desktop since
 installing it.
+
+See [Upgrading](upgrading.md) for updating an existing install.

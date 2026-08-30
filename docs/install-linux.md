@@ -182,3 +182,5 @@ sudo systemctl enable mcp-eveng.service    # start automatically on boot
 
 sudo ss -tulnp                             # confirm it's listening where expected
 ```
+
+See [Upgrading](upgrading.md) for updating an existing install.
