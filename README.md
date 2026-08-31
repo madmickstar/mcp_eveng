@@ -25,6 +25,7 @@ folders and users — all through the EVENG REST API.
     - [`MCP_LOG_LEVEL`](#mcp_log_level-options-and-where-logs-go)
     - [`MCP_ALLOWED_HOSTS`](#mcp_allowed_hosts-dns-rebinding-protection)
     - [`MCP_STATEFUL`](#mcp_stateful-session-persistence-across-restarts)
+    - [`MCP_API_KEY` and `MCP_TLS_*`](#mcp_api_key-and-mcp_tls_-optional-extra-security)
 - [EVE-NG Pro vs Community MCP tools](#eve-ng-pro-vs-community-mcp-tools)
 - [Available MCP tools](#available-mcp-tools)
 - [Controlling which MCP tools are exposed](#controlling-which-mcp-tools-are-exposed)
@@ -35,7 +36,6 @@ folders and users — all through the EVENG REST API.
 - [Known issues](#known-issues)
 - [Development](#development)
   - [Why `mcp` is pinned below `2.0`](#why-mcp-is-pinned-below-20)
-- [Publishing to PyPI](#publishing-to-pypi)
 - [License](#license)
 - [Tested versions](#tested-versions)
 
@@ -70,7 +70,7 @@ pip install -e .
 
 ## Capture relay
 
-PRO/Corporate only. Streams an EVE-NG PRO Wireshark capture to a local
+PRO only. Streams an EVE-NG PRO Wireshark capture to a local
 Wireshark without a personal SSH+sudo account on the EVE-NG host.
 
 **[Capture relay guide](docs/capture-relay.md)**
@@ -122,6 +122,10 @@ the https/443 defaults.
 | `MCP_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` |
 | `MCP_ALLOWED_HOSTS` | `localhost:*` | Comma-separated Host-header allowlist. **Required** when `MCP_HOST` is not a loopback address |
 | `MCP_STATEFUL` | `true` | `false` disables streamable-http session persistence |
+| `MCP_API_KEY` | unset | If set, every request needs `Authorization: Bearer <key>` or gets a 401 |
+| `MCP_TLS_CERT_PATH` | unset | TLS certificate file. Serves HTTPS instead of plain HTTP when set together with `MCP_TLS_KEY_PATH` |
+| `MCP_TLS_KEY_PATH` | unset | TLS certificate's private key file. Required together with `MCP_TLS_CERT_PATH` |
+| `MCP_TLS_KEY_PASSWORD` | unset | Only needed if the private key above is itself password-protected |
 
 All variables can also be set as real environment variables, which take
 precedence over `.env`.
@@ -173,6 +177,34 @@ restart never confuses connected clients — useful for `--http` deployments
 that get redeployed/restarted regularly. This is a real SDK feature
 (`FastMCP(..., stateless_http=...)`), not a workaround.
 
+#### `MCP_API_KEY` and `MCP_TLS_*`: optional extra security
+
+Neither is required — `MCP_ALLOWED_HOSTS` above is the only thing this
+server enforces by default. Both are opt-in for anyone who wants more than
+that, e.g. a `--http` deployment reachable beyond localhost.
+
+`MCP_API_KEY`, if set, requires every `--sse`/`--http` request to present
+it via `Authorization: Bearer <key>`, or the request gets a `401` before
+it ever reaches the MCP handler. Checked with a constant-time comparison,
+not `==`, so a wrong guess can't be narrowed down via response timing.
+Through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (see the
+install guides' streamable-http examples), add it as a header:
+
+```json
+"args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+"env": {"AUTH_HEADER": "Bearer <your MCP_API_KEY value>"}
+```
+
+`MCP_TLS_CERT_PATH`/`MCP_TLS_KEY_PATH` (both required together, or leave
+both unset) serve `--sse`/`--http` over HTTPS instead of plain HTTP.
+`MCP_TLS_KEY_PASSWORD` is only needed if the private key file itself is
+encrypted. Requires this server's own certificate to be one the *client*
+trusts — for a self-signed cert in a lab, setting
+`NODE_TLS_REJECT_UNAUTHORIZED=0` in `mcp-remote`'s own `env` block skips
+verification (a standard Node.js setting, not specific to `mcp-remote`,
+so it affects any TLS connection that process makes); use a CA-signed
+certificate for anything beyond that.
+
 For running the server and configuring it in Claude Desktop / Claude Code
 (both stdio and streamable-http), see the
 **[Linux/macOS](docs/install-linux.md)** or
@@ -184,13 +216,12 @@ kept there rather than duplicated here.
 ## EVE-NG Pro vs Community MCP tools
 
 EVE-NG's REST API has no explicit "edition" field, but the version string
-`get_status` returns carries a `-PRO` suffix on Professional/Corporate/
-Learning Center tiers (confirmed live: `6.5.0-27-PRO`); plain Community
-builds don't have it (confirmed live: `6.2.0-4`). This is the only
-reliable signal for which edition a server is running, and it's what
-every edition-aware behavior below derives from (`edition.is_pro_edition`).
-An unrecognized or missing version string is treated as Community, the
-more conservative assumption.
+`get_status` returns carries a `-PRO` suffix on PRO servers (confirmed
+live: `6.5.0-27-PRO`); plain Community builds don't have it (confirmed
+live: `6.2.0-4`). This is the only reliable signal for which edition a
+server is running, and it's what every edition-aware behavior below
+derives from (`edition.is_pro_edition`). An unrecognized or missing
+version string is treated as Community, the more conservative assumption.
 
 Five tools genuinely behave differently by edition — confirmed against
 EVE-NG's own official [features-compare page](https://www.eve-ng.net/index.php/features-compare/),
@@ -272,7 +303,7 @@ design reasoning, and non-obvious behavior — can be found in
 Every tool can be individually enabled or disabled, via a dedicated
 dotenv-syntax config file — kept separate from the main `.env` so tool
 visibility is easy to review and diff independently of connection
-settings. Copy **`tools.env.pro.example`** (PRO/Corporate edition) or
+settings. Copy **`tools.env.pro.example`** (PRO edition) or
 **`tools.env.comm.example`** (Community edition) to `tools.env` (or point
 `MCP_TOOLS_CONFIG_PATH` at wherever you keep it) and set any tool to
 `enabled` or `disabled`:
@@ -285,7 +316,7 @@ list_users=disabled
 The two example files list exactly the same tools — full parity, nothing
 omitted from either — and differ only in the *value* of two lines:
 `export_node`/`share_lab` are `enabled` in the PRO file and `disabled` in
-the Community one, since both are PRO/Corporate-only features (see
+the Community one, since both are PRO-only features (see
 "EVE-NG Pro vs Community MCP tools" above) with nothing useful to do on
 Community.
 Everything else, including the six user-management tools, is listed
@@ -357,7 +388,7 @@ mcp-eveng/
 │   ├── install-linux.md    # Linux/macOS install, running, Claude Desktop JSON
 │   ├── install-windows.md  # Windows install, running, Claude Desktop JSON
 │   └── tools-reference.md  # detailed per-tool design notes (see "Available MCP tools")
-├── tools.env.pro.example   # per-tool enable/disable config, PRO/Corporate -- copy to tools.env
+├── tools.env.pro.example   # per-tool enable/disable config, PRO -- copy to tools.env
 ├── tools.env.comm.example  # same, Community edition (disables 2 PRO-only tools)
 └── .github/workflows/      # CI + PyPI publish
 ```
@@ -437,14 +468,6 @@ intentionally — see `pyproject.toml`. Revisit this pin (and re-verify all
 three transports, `transport_security`, and `stateless_http`) when migrating
 to `2.x`.
 
-## Publishing to PyPI
-
-This repo is set up for [Trusted Publishing](https://docs.pypi.org/trusted-publishers/):
-tagging a release (`vX.Y.Z`) triggers `.github/workflows/publish.yml`, which
-builds and uploads to PyPI with no stored API tokens. Configure the trusted
-publisher on PyPI's project settings page pointing at this repository and the
-`publish.yml` workflow before tagging your first release.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -454,7 +477,7 @@ MIT — see [LICENSE](LICENSE).
 The EVE-NG server versions this project has actually been exercised
 against live, confirmed via each server's own `get_status` response:
 
-- **PRO/Corporate**: `6.5.0-27-PRO`
+- **PRO**: `6.5.0-27-PRO`
 - **Community**: `6.2.0-4`
 
 Other versions of either edition likely work too — nothing in this

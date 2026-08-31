@@ -24,7 +24,7 @@ def make_client(status=PRO_STATUS) -> AsyncMock:
 
 def ssh_settings(**overrides) -> CaptureSSHSettings:
     defaults = dict(
-        ssh_host="172.16.130.14",
+        ssh_host="192.168.1.50",
         ssh_username="capture-svc",
         ssh_key_path="/etc/mcp-eveng/capture-relay.key",
         token_secret="s3cret",
@@ -34,7 +34,7 @@ def ssh_settings(**overrides) -> CaptureSSHSettings:
 
 
 def url_settings(**overrides) -> CaptureURLSettings:
-    defaults = dict(advertise_host="172.16.130.14")
+    defaults = dict(advertise_host="192.168.1.50")
     defaults.update(overrides)
     return CaptureURLSettings(_env_file=None, **defaults)  # type: ignore[call-arg]
 
@@ -191,7 +191,7 @@ async def test_get_capture_by_position_mints_token_and_url() -> None:
 
     assert result["status"] == "success"
     assert result["data"]["container"] == "Capture-2101248"  # position 1 = oldest
-    assert result["data"]["capture_url"].startswith("capture://172.16.130.14/Capture-2101248/")
+    assert result["data"]["capture_url"].startswith("capture://192.168.1.50/Capture-2101248/")
     assert "?" not in result["data"]["capture_url"]
 
 

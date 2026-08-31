@@ -1,4 +1,4 @@
-# Capture relay (PRO/Corporate only)
+# Capture relay (PRO only)
 
 Streams an EVE-NG PRO capture to a local Wireshark, without a personal
 SSH+sudo account on the EVE-NG host. Community doesn't need this — its
@@ -13,7 +13,7 @@ own GUI already generates working `capture://` links.
 - [4. Sudoers (EVE-NG host)](#4-sudoers-eve-ng-host)
 - [5. Install and config mcp-relay App (MCP server)](#5-install-and-config-mcp-relay-app-mcp-server)
 - [6. Install and config mcp-eveng App (MCP server)](#6-install-and-config-mcp-eveng-app-mcp-server)
-- [7. Create and start the systemd service](#7-create-and-start-the-systemd-service)
+- [7. Create and start the systemd service (MCP server)](#7-create-and-start-the-systemd-service-mcp-server)
 - [8. Enable the tools on the main mcp-eveng process](#8-enable-the-tools-on-the-main-mcp-eveng-process)
 - [9. The `.bat` companion and Windows registration](#9-the-bat-companion-and-windows-registration)
 - [Known limitations](#known-limitations)
@@ -130,8 +130,15 @@ sudo chown -R mcp-eveng:mcp-eveng /opt/mcp_relay
 sudo -u mcp-eveng /opt/mcp_relay/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
 ```
 
+The clone target is `/opt/mcp_eveng`, not `/opt/mcp_relay` — there is
+only ONE shared source checkout (used by both apps); `/opt/mcp_relay`
+is just this app's own separate venv + `.env`, installed *from* that
+shared source above.
+
 Copy **`.env.capture-relay.example`** (project root) to `/opt/mcp_relay/.env`
-and configure it.
+and configure it. Includes optional `CAPTURE_RELAY_TLS_CERT_PATH`/
+`_KEY_PATH` to serve this relay over HTTPS instead of plain HTTP — see
+the comments in that file.
 
 ## 6. Install and config mcp-eveng App (MCP server)
 
@@ -143,16 +150,18 @@ This upgrades the existing `mcp-eveng` install to add the `[capture-relay]`
 extra (`asyncssh`) it needs for `list_captures`/`get_capture` to SSH into
 the EVE-NG host directly.
 
-Copy **`.env.example`** (project root) to the main `mcp-eveng` process's
-`.env` and configure it.
+Your `.env` here already exists from setting up `mcp-eveng` itself (see
+`install-linux.md`/`install-windows.md`) — this step only needs a few
+fields added or updated in that existing file, not a fresh copy of
+`.env.example`:
 
-`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are identical in both `.env`
-files. `CAPTURE_SSH_KEY_PATH` is a local path per machine — only
-identical if both processes run on the same machine.
-`CAPTURE_TOKEN_SECRET` **must be the exact same value** in both —
-generate once (`openssl rand -hex 32`) and copy into both.
+- `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are identical in both `.env` files.
+- `CAPTURE_SSH_KEY_PATH` is a local path per machine — only identical
+  if both processes run on the same machine.
+- `CAPTURE_TOKEN_SECRET` **must be the exact same value** in both —
+  generate once (`openssl rand -hex 32`) and copy into both.
 
-## 7. Create and start the systemd service
+## 7. Create and start the systemd service (MCP server)
 
 ```bash
 sudo vi /etc/systemd/system/mcp-relay.service

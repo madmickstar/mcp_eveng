@@ -20,11 +20,18 @@ flow — this doc only covers OS-specific setup.
 git clone https://github.com/madmickstar/mcp_eveng.git
 cd mcp_eveng
 python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+.venv/bin/pip install -e .
 ```
 
+Calls the venv's own `pip` directly, without a separate activation
+step. If you're doing development work on this project itself (running
+the test suite, linting), use `.[dev]` instead of `.` in that command.
+
 ## Running
+
+Either activate the venv first (`source .venv/bin/activate`) and use
+the bare commands below, or call `.venv/bin/mcp-eveng` directly every
+time without activating -- both work identically.
 
 ```bash
 mcp-eveng          # stdio (default)
@@ -82,6 +89,22 @@ Requires [Node.js](https://nodejs.org/) (for `npx`). Bridge through
             "http://192.168.1.100:8000/mcp",
             "--allow-http"
         ]
+    }
+  }
+}
+```
+
+If `MCP_API_KEY` is set on the server (see README's Configuration
+section), add the header and switch to `https://` if TLS is also
+configured:
+
+```json
+{
+  "mcpServers": {
+    "eveng_http": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "env": { "AUTH_HEADER": "Bearer <your MCP_API_KEY value>" }
     }
   }
 }

@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-31
+
+### Fixed
+- **"PRO/Corporate" replaced with "PRO" throughout** (66 mechanical
+  occurrences across 17 files, plus 3 "Professional/Corporate/Learning
+  Center tiers" mentions rewritten properly) -- EVE-NG has no separate
+  "Corporate" product; this project's own edition check is a single
+  binary `is_pro_edition()`, with no sub-tier distinction to begin
+  with, so the old wording implied a distinction that was never real.
+- **A real internal IP address (the tester's own EVE-NG PRO server)
+  was hardcoded across 28 places in 7 test files** -- confirmed via a
+  full audit of every hostname/IP/username/password literal across the
+  whole test suite (everything else checked out: IANA-reserved test
+  domains, EVE-NG's own documented defaults, generic placeholders).
+  Replaced with the same placeholder already used in the docs
+  (`192.168.1.50`) for consistency. Deliberately did NOT rewrite git
+  history to scrub it from past commits too -- weighed against the
+  actual severity (a private RFC1918 address, not attached to any
+  credential or public hostname) and the real disruption a full
+  history rewrite causes (every subsequent commit SHA changes, forces
+  a rewrite on every existing clone/fork), the forward-only fix was
+  judged proportionate.
+- **`.env.example`/`.env.capture-relay.example` spacing was
+  inconsistent** -- blank lines between two adjacent variables with no
+  comment describing either one (removed) vs. between a variable and
+  the comment block documenting the *next* one (kept) -- per direct
+  feedback on which pattern should apply where.
+
+### Documentation
+- **"Publishing to PyPI" section removed from the README** entirely.
+- **`docs/capture-relay.md` steps 5-7 reorganized** per direct
+  feedback: the two install-and-configure steps grouped by *app*
+  (`mcp-relay` then `mcp-eveng`) instead of by file type, each with
+  its own install command (a missing `git clone` added, with a note
+  on why it targets the shared `/opt/mcp_eveng` even under the
+  "install mcp-relay" step); step 6's "copy `.env.example`" instruction
+  corrected -- that file already exists from the base `mcp-eveng`
+  install, so this step now says to update specific existing fields,
+  not copy a fresh file, with the field list converted to bullets; a
+  "Start app manually" step added after the systemd commands; step 7
+  renamed to include "(MCP server)" for clarity.
+- **`scripts/eve-capture.bat`**: added self-signed-cert support
+  (`-k`/`--insecure` on every curl call -- a no-op on plain HTTP,
+  needed for HTTPS against a self-signed cert, the realistic case for
+  a relay on a private/lab network) and a new `RELAY_SCHEME` variable
+  so the script can actually reach a relay that has TLS configured
+  (added in the API-key/TLS work below) at all -- a real gap: relay-side
+  TLS support existed with no way for this script to use it until now.
+  `--connect-timeout`/`--max-time` (previously hardcoded 5/10) are now
+  the configurable `RELAY_CONNECT_TIMEOUT`/`RELAY_MAX_TIME` variables,
+  both defaulting to 5 per direct request. Also fixed three stale
+  step-number references left over from the `capture-relay.md`
+  renumbering (missed in this file specifically at the time) and
+  rewrote the file's top status comment, which still said "UNTESTED
+  end-to-end" and "still being confirmed" despite everything having
+  since been confirmed working live.
+
+### Added
+- **Optional API key for `mcp-eveng`'s `--sse`/`--http` transports**
+  (`MCP_API_KEY`). When set, every request must present it via
+  `Authorization: Bearer <key>` or gets a `401` before it ever reaches
+  the MCP handler -- checked with `secrets.compare_digest`, not `==`,
+  so a wrong guess can't be narrowed down via response timing.
+- **Optional TLS for both `mcp-eveng` and `mcp-relay`**
+  (`MCP_TLS_CERT_PATH`/`_KEY_PATH`/`_KEY_PASSWORD` on the main process,
+  `CAPTURE_RELAY_TLS_CERT_PATH`/`_KEY_PATH`/`_KEY_PASSWORD` on the
+  relay). Cert and key are validated as a pair -- one without the
+  other fails fast at startup, not a confusing runtime error.
+  `mcp-relay` already called `uvicorn.run()` directly, so this was a
+  direct kwarg passthrough. `mcp-eveng`'s `--sse`/`--http` needed more:
+  the SDK's own `FastMCP.run()` hardcodes a plain-HTTP `uvicorn.Config`
+  with no hook for TLS (or for the API key above), confirmed by reading
+  its actual source -- `run_sse_async`/`run_streamable_http_async` both
+  build `uvicorn.Config(..., host=..., port=..., log_level=...)` with
+  nothing else configurable. Fixed by building the same Starlette app
+  the SDK itself would (via its own public `sse_app()`/
+  `streamable_http_app()`), optionally wrapping it in the new API-key
+  middleware, and serving it with our own `uvicorn.Config` instead --
+  `stdio` is untouched, still goes through the SDK's own `mcp.run()`
+  entirely, since it never opens a socket and neither feature applies.
+  Both confirmed working against real running servers (not just code
+  review): correct 401/401/200 sequence across no-key/wrong-key/
+  right-key requests, successful TLS handshake on both processes, and
+  plain HTTP correctly refused once TLS is configured. 28 new tests
+  covering the config validators, the middleware directly (via
+  Starlette's `TestClient`), and that settings genuinely reach
+  `uvicorn.Config`/`uvicorn.run` rather than just being present
+  somewhere in a settings object. `ruff check`/`ruff format --check`/
+  `mypy` all clean -- one genuine mypy limitation surfaced along the
+  way: `**dict` unpacking against `uvicorn`'s heterogeneously-typed
+  keyword arguments doesn't type-check at all, regardless of the
+  dict's actual contents; switched to explicit named parameters
+  instead (uvicorn's own default for each is already `None`, confirmed
+  against its signature), which is cleaner code besides.
+
 ## [0.4.0] - 2026-08-30
 
 ### Fixed
@@ -111,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own CI matrix (3.10-3.13) is the definitive cross-version check.
 
 ### Added
-- **`get_link_quality`: new PRO/Corporate-only tool complementing
+- **`get_link_quality`: new PRO-only tool complementing
   `set_link_quality`.** Gets the current delay/jitter/packet-loss/
   bandwidth on both sides of an existing connection -- the given node's
   interface, and whatever's on the opposite end, resolved automatically
@@ -658,7 +753,7 @@ rather than repeating every individual commit message.
   from that entry and reused automatically; `far_delay` etc. are optional
   overrides, not required inputs -- supplying one changes just that
   value, leaving the rest untouched. Not confirmed whether this holds on
-  every PRO/Corporate version, only the one live server tested, but no
+  every PRO version, only the one live server tested, but no
   new call is needed to use it either way. Verified: two new tests
   (reading current far-side values when omitted, and a partial override
   leaving the untouched far-side fields at their current values, not 0)
@@ -739,7 +834,7 @@ rather than repeating every individual commit message.
   though nothing stops them being set there).
 
 ### Added
-- **`list_captures`/`get_capture`: new PRO/Corporate-only tools, plus a
+- **`list_captures`/`get_capture`: new PRO-only tools, plus a
   standalone `mcp-eveng-capture-relay` systemd service and a Windows
   `.bat` companion, for streaming an EVE-NG PRO Wireshark capture to a
   local Wireshark without a personal SSH+sudo account on the EVE-NG
@@ -787,13 +882,13 @@ rather than repeating every individual commit message.
   disabled by default in both `tools.env.*.example` files even on PRO,
   since it depends on infrastructure (the SSH accounts, the relay
   service) that doesn't exist until deliberately set up.
-- **`set_link_quality`: new PRO/Corporate-only tool for per-connection
+- **`set_link_quality`: new PRO-only tool for per-connection
   link quality (delay/jitter/packet loss/bandwidth), set independently on
   each side of a connection.** No Community equivalent exists at all
   (confirmed directly by a user: no GUI option there), and unlike this
   project's other PRO/Community differences, there's no open-source
   Community-side code to cross-check against either -- this feature is
-  PRO/Corporate-exclusive from the ground up. There's no documented
+  PRO-exclusive from the ground up. There's no documented
   public API for it: EVE-NG's own API docs don't cover it, and PRO's
   backend is closed-source. The request shape (`PUT /labs/{lab}/quality`)
   was captured live from a real PRO server's own GUI network traffic --
@@ -914,10 +1009,10 @@ rather than repeating every individual commit message.
   out, never actually tested what it appeared to either way, for the
   same reason above) -- replaced with tests reading raw file content
   directly plus one full functional end-to-end check.
-- **`tools.env.example` split into `tools.env.pro.example` (PRO/Corporate)
+- **`tools.env.example` split into `tools.env.pro.example` (PRO)
   and `tools.env.comm.example` (Community).** The two are identical
   except `export_node`/`share_lab` are disabled in the Community file --
-  both are PRO/Corporate-only features (see "PRO vs Community
+  both are PRO-only features (see "PRO vs Community
   differences"), so there's nothing they can actually do there. The old
   single `tools.env.example` (effectively already the PRO version, since
   it had both tools enabled) is removed, not kept as a third file.
@@ -957,7 +1052,7 @@ rather than repeating every individual commit message.
   generic `"Request not valid"`/`"Lab has not been modified"` EVE-NG
   itself gives no useful detail on. Confirmed against EVE-NG's own
   official features-compare page: both are listed there as separate
-  toggleable PRO/Corporate features ("Export/Import configs...", "Shared
+  toggleable PRO features ("Export/Import configs...", "Shared
   Lab"/"Shared Project"), directly explaining the unconditional live
   failures found while testing against a real Community server.
 - New `edition.py` module: extracted the previously-private
