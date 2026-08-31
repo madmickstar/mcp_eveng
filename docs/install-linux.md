@@ -168,48 +168,21 @@ sudo chmod 750 /etc/mcp-eveng
 Whatever files you put there should stay owned by `mcp-eveng`;
 private key files specifically should be `600` (owner read/write
 only), e.g. `sudo chmod 600 /etc/mcp-eveng/key.pem`. No systemd unit
-change needed to read from here — `ProtectSystem=strict` below makes
-the filesystem read-only outside `ReadWritePaths`, not inaccessible,
-and this directory is only ever read from, never written to.
+change needed to read from here — `ProtectSystem=strict` (set in
+`systemd/mcp-eveng.service`, see the next step) makes the filesystem
+read-only outside `ReadWritePaths`, not inaccessible, and this
+directory is only ever read from, never written to.
 
-6. Create the systemd unit:
+6. Install the systemd unit — a ready-to-use copy ships in the repo
+   itself, already cloned to `/opt/mcp_eveng` from step 2:
 
 ```bash
-sudo vi /etc/systemd/system/mcp-eveng.service
+sudo cp /opt/mcp_eveng/systemd/mcp-eveng.service /etc/systemd/system/mcp-eveng.service
 ```
 
-```ini
-# /etc/systemd/system/mcp-eveng.service
-
-[Unit]
-Description=MCP server for EVE-NG network emulator automation
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-
-User=mcp-eveng
-Group=mcp-eveng
-
-WorkingDirectory=/opt/mcp_eveng
-ExecStart=/opt/mcp_eveng/.venv/bin/mcp-eveng --http
-
-Restart=on-failure
-RestartSec=5
-
-StandardOutput=journal
-StandardError=journal
-
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/mcp_eveng
-
-[Install]
-WantedBy=multi-user.target
-```
+Review it first if your paths/account differ from this guide's
+(`/opt/mcp_eveng`, the `mcp-eveng` account) — it's a plain text file,
+`systemd/mcp-eveng.service` in the repo.
 
 7. Start, verify, and enable at boot:
 

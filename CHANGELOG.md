@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-31
+
+### Documentation
+- **Combining a server certificate with a CA certificate into one PEM
+  file requires the server cert FIRST, CA cert below it** — confirmed
+  directly with a real CA-signed cert pair: the reverse order fails
+  with `OSError [X509: KEY_VALUES_MISMATCH] key values mismatch`, since
+  `load_cert_chain()` matches the *first* certificate in the file
+  against the private key, not any certificate that happens to be
+  present. A universal PEM chain-file convention, not specific to this
+  project, but undocumented here until now. Added to `README.md`'s TLS
+  section and both `.env.example`'s `*_TLS_CERT_PATH` comments.
+
+### Added
+- **Ready-to-use systemd unit files** (`systemd/mcp-eveng.service`,
+  `systemd/mcp-relay.service`) — `install-linux.md`/`capture-relay.md`
+  now `cp` these directly instead of having the reader hand-type or
+  copy-paste the same content from a markdown code block, which also
+  means the docs and the actual files can't drift out of sync with
+  each other the way two separate copies of the same content could.
+  README's Project layout tree refreshed while in there — it had grown
+  quite stale (missing `capture_relay/`, several `docs/` additions,
+  `.env.example`, `scripts/`, `assets/`).
+
+### Changed
+- **`mcp-eveng` and `mcp-relay` now share ONE venv and ONE `.env` file
+  -- `/opt/mcp_relay` as a separate deployment no longer exists.** Per
+  direct feedback: now that `asyncssh`/`starlette`/`uvicorn` are base
+  dependencies (see the entry below), both processes are just two
+  different entrypoints (`mcp-eveng`, `mcp-eveng-capture-relay`) of the
+  exact same installed package -- there was no longer a real reason for
+  a second venv. Confirmed directly, not assumed: every settings class
+  involved already uses `extra="ignore"`, so pointing both processes at
+  the same `.env` file works with zero code changes -- verified by
+  actually loading `EvengSettings`/`MCPTransportSettings`/
+  `CaptureSSHSettings`/`CaptureURLSettings`/`RelayListenSettings` all
+  from one real combined file and confirming each correctly reads only
+  its own variables. This also fixes a genuine footgun: `CAPTURE_SSH_*`
+  and `CAPTURE_TOKEN_SECRET` previously had to be kept identical across
+  two separate files by hand; now there's only one declaration of each,
+  so they can't drift out of sync at all. `.env.capture-relay.example`
+  is gone -- merged into `.env.example` as a clearly-labeled section
+  below the main settings, per direct request not to mix the two.
+  `docs/capture-relay.md` restructured accordingly (steps 5/6 merged
+  into one settings step; the systemd unit now uses
+  `WorkingDirectory=/opt/mcp_eveng`, matching `mcp-eveng.service`
+  itself, with only `ExecStart` differing between the two units) and
+  `docs/upgrading.md` simplified to one `pip install` covering both
+  services. 618 tests still pass unchanged -- this was a deployment/
+  docs restructuring, not a code-logic change, confirmed by the test
+  suite and every source file needing zero changes beyond what's
+  already covered by the entry below.
+
+- **`asyncssh`/`starlette`/`uvicorn` folded into the base install --
+  the optional `capture-relay` extra is gone.** Per direct feedback:
+  the complexity of a separate extra wasn't worth it for the actual
+  size of what it gated. Confirmed exactly what that extra was really
+  adding: `starlette`/`uvicorn` were already pulled in transitively by
+  `mcp[cli]` itself (its own `--sse`/`--http` transports are built on
+  both), so the only genuinely new dependency was `asyncssh` (plus its
+  own single dependency, `cryptography`) -- a small, single-purpose
+  library, not worth a separate install step for. Verified end-to-end
+  in a fresh, clean venv: a plain `pip install -e .` (no extra) now
+  installs everything `list_captures`/`get_capture` and the standalone
+  relay both need. `docs/capture-relay.md` steps 5/6 and
+  `docs/upgrading.md` updated to drop `[capture-relay]` from every
+  install/upgrade command; step 6 renamed from "Install and config" to
+  "Config" since there's nothing left to separately install if
+  `mcp-eveng` was already set up via `install-linux.md`'s systemd
+  section. `_require_asyncssh()`'s error message (in the unlikely case
+  it's still missing on a broken/incomplete install) updated to match
+  -- it's a base dependency now, not something to `pip install` an
+  extra for.
+
 ## [0.6.0] - 2026-08-31
 
 ### Documentation

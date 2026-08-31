@@ -1,10 +1,9 @@
 # Upgrading
 
-There is only ONE source checkout, shared by both apps — `mcp-relay`
-doesn't have its own separate clone, just its own separate venv. Pull
-once, reinstall into whichever venv(s) you have.
-
-## mcp-eveng app
+`mcp-eveng` and `mcp-relay` share ONE source checkout, ONE venv, and
+ONE `.env` file — not separate installs. One `git pull` + one
+`pip install` covers both; restart whichever systemd service(s) you
+run afterward.
 
 **systemd deployment (Linux):**
 
@@ -13,6 +12,7 @@ cd /opt/mcp_eveng
 sudo git pull
 sudo -u mcp-eveng /opt/mcp_eveng/.venv/bin/pip install /opt/mcp_eveng
 sudo systemctl restart mcp-eveng.service
+sudo systemctl restart mcp-relay.service   # only if you run this too
 ```
 
 **Manual install (any OS):**
@@ -23,31 +23,14 @@ git pull
 pip install -e .
 ```
 
-Restart your running `mcp-eveng` (or `python -m mcp_eveng`) process.
-Windows: use your venv's own `pip` (`.venv\Scripts\pip.exe`, or an
-activated venv) for the same command.
+Restart whichever process(es) you have running (`mcp-eveng`,
+`python -m mcp_eveng`, `mcp-eveng-capture-relay`, or
+`python -m mcp_eveng.capture_relay`). Windows: use your venv's own
+`pip` (`.venv\Scripts\pip.exe`, or an activated venv) for the same
+command.
 
 If you're doing development work on this project itself (running the
-test suite, linting), use `.[dev]` instead of the plain commands above,
-in either scenario.
-
-## mcp-relay app
-
-**systemd deployment (Linux):**
-
-```bash
-sudo -u mcp-eveng /opt/mcp_relay/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
-sudo systemctl restart mcp-relay.service
-```
-
-**Manual install (any OS):**
-
-```bash
-pip install "/path/to/mcp_eveng[capture-relay]"
-```
-
-Restart your running `python -m mcp_eveng.capture_relay` (or
-`mcp-eveng-capture-relay`) process.
+test suite, linting), use `.[dev]` instead of the plain commands above.
 
 ## Note
 
@@ -62,4 +45,4 @@ running or installed:
   actually get installed.
 
 Either way: always re-run the `pip install` command shown above after
-pulling, for both apps.
+pulling.

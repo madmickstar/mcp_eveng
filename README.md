@@ -205,6 +205,17 @@ verification (a standard Node.js setting, not specific to `mcp-remote`,
 so it affects any TLS connection that process makes); use a CA-signed
 certificate for anything beyond that.
 
+**If `MCP_TLS_CERT_PATH` points at a combined file (your server
+certificate and a CA certificate concatenated together), the server
+certificate must come first, with the CA certificate below it** —
+confirmed directly: with the CA cert first, the server fails to start
+with `[X509: KEY_VALUES_MISMATCH] key values mismatch`, since the
+*first* certificate in the file is what OpenSSL matches against your
+private key, and the private key belongs to the server certificate,
+not the CA. This is a universal PEM chain-file convention (the same
+order Apache/nginx/every OpenSSL-based server expects), not specific
+to this project.
+
 For running the server and configuring it in Claude Desktop / Claude Code
 (both stdio and streamable-http), see the
 **[Linux/macOS](docs/install-linux.md)** or
@@ -357,40 +368,44 @@ just reports what actually got registered.
 ```
 mcp-eveng/
 ├── src/mcp_eveng/
-│   ├── client.py        # async EVENG REST API client (incl. list_all_labs recursion helper)
-│   ├── config.py        # pydantic-settings, reads .env
-│   ├── confirmation.py  # shared search/select/confirm state machine for deletes
-│   ├── dependencies.py  # shared client singleton
+│   ├── client.py          # async EVENG REST API client (incl. list_all_labs recursion helper)
+│   ├── config.py          # pydantic-settings, reads .env
+│   ├── confirmation.py    # shared search/select/confirm state machine for deletes
+│   ├── dependencies.py    # shared client singleton
 │   ├── edition.py         # PRO vs Community detection, shared by all edition-gated tools
 │   ├── exceptions.py
-│   ├── search.py         # case-insensitive record search (used by delete tools)
+│   ├── search.py          # case-insensitive record search (used by delete tools)
 │   ├── telnet.py          # raw asyncio telnet client (IAC handling) for telnet_node
 │   ├── tool_config.py     # per-tool enable/disable config loader (tools.env)
 │   ├── vendor.py          # best-effort vendor extraction + image-availability check
-│   ├── server.py        # FastMCP assembly + transport security/statefulness
-│   ├── __main__.py       # CLI: --sse / --http flags
-│   └── tools/             # one module per API area
+│   ├── server.py          # FastMCP assembly + transport security/statefulness/API key/TLS
+│   ├── __main__.py        # CLI: --sse / --http flags
+│   ├── tools/             # one module per API area
+│   └── capture_relay/     # standalone mcp-relay service (own entrypoint, own config,
+│                           # shares this same venv and .env -- see docs/capture-relay.md)
+├── systemd/
+│   ├── mcp-eveng.service  # ready-to-use unit for the main MCP server
+│   └── mcp-relay.service  # ready-to-use unit for the standalone capture-relay service
+├── scripts/
+│   └── eve-capture.bat    # Windows capture:// protocol handler companion
 ├── tests/
 │   ├── conftest.py
-│   ├── test_cli.py
-│   ├── test_client.py
-│   ├── test_config.py
-│   ├── test_confirmation.py
-│   ├── test_dependencies.py
-│   ├── test_edition.py
-│   ├── test_search.py
-│   ├── test_telnet.py
-│   ├── test_tool_config.py
-│   ├── test_vendor.py
-│   ├── test_server.py
-│   └── tools/
+│   ├── test_*.py
+│   ├── tools/
+│   └── capture_relay/
 ├── docs/
-│   ├── install-linux.md    # Linux/macOS install, running, Claude Desktop JSON
-│   ├── install-windows.md  # Windows install, running, Claude Desktop JSON
-│   └── tools-reference.md  # detailed per-tool design notes (see "Available MCP tools")
-├── tools.env.pro.example   # per-tool enable/disable config, PRO -- copy to tools.env
-├── tools.env.comm.example  # same, Community edition (disables 2 PRO-only tools)
-└── .github/workflows/      # CI + PyPI publish
+│   ├── install-linux.md        # Linux/macOS install, running, Claude Desktop JSON
+│   ├── install-windows.md      # Windows install, running, Claude Desktop JSON
+│   ├── capture-relay.md        # full capture-relay setup guide
+│   ├── upgrading.md            # updating an existing install
+│   ├── manual-curl-commands.md # testing the server directly over HTTP
+│   └── tools-reference.md      # detailed per-tool design notes (see "Available MCP tools")
+├── assets/
+│   └── banner.png
+├── .env.example             # shared config for both mcp-eveng and mcp-relay -- copy to .env
+├── tools.env.pro.example    # per-tool enable/disable config, PRO -- copy to tools.env
+├── tools.env.comm.example   # same, Community edition (disables 2 PRO-only tools)
+└── .github/workflows/       # CI + PyPI publish
 ```
 
 ## Troubleshooting
