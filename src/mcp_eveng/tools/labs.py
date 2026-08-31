@@ -88,7 +88,7 @@ async def share_lab(
 ) -> dict[str, Any]:
     """Share a lab with one or more users, added to whoever it's already shared with.
 
-    **PRO/Corporate only.** Listed as a separate toggleable feature
+    **PRO only.** Listed as a separate toggleable feature
     ("Shared Lab", "Shared Project") on EVE-NG's own official
     features-compare page, and confirmed live on Community: `get_lab`
     never returns a `shared` key at all, and attempting to actually add a
@@ -125,7 +125,7 @@ async def share_lab(
         return {
             "status": "error",
             "message": (
-                "Lab sharing is a PRO/Corporate-only EVE-NG feature -- listed as a "
+                "Lab sharing is a PRO-only EVE-NG feature -- listed as a "
                 "separate toggleable feature on EVE-NG's own official comparison page, "
                 "and confirmed live: on Community, get_lab never returns a 'shared' key "
                 'at all, and attempting to actually add a share fails with "Lab has not '
@@ -536,7 +536,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
         ) -> dict[str, Any]:
             """Share a lab with one or more users, added to whoever it's already shared with.
 
-            **PRO/Corporate only** -- listed as a separate toggleable
+            **PRO only** -- listed as a separate toggleable
             feature on EVE-NG's own official comparison page, and
             confirmed live it doesn't actually work on Community despite
             appearing to accept the request -- there's no per-lab

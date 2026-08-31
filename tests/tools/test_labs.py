@@ -71,7 +71,7 @@ def _lab_with_shared(*shared: str) -> dict:
 
 
 def _pro_client(**method_returns) -> AsyncMock:
-    # share_lab is PRO/Corporate-only and checks the server's edition
+    # share_lab is PRO-only and checks the server's edition
     # first -- every test below except the edition-gate tests themselves
     # needs a PRO get_status to reach the rest of the logic at all.
     client = make_client(**method_returns)
@@ -80,7 +80,7 @@ def _pro_client(**method_returns) -> AsyncMock:
 
 
 async def test_share_lab_rejects_immediately_on_community_edition() -> None:
-    # PRO/Corporate-only, per EVE-NG's own official comparison page and
+    # PRO-only, per EVE-NG's own official comparison page and
     # confirmed live -- must reject before even fetching usernames, not
     # walk through search/select only to fail at the end.
     client = AsyncMock()

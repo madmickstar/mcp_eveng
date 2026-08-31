@@ -1915,7 +1915,7 @@ async def wipe_node(client: EvengClient, lab_path: str, node_id: int | None = No
 async def export_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
     """Export one node's (or all nodes') running config into the saved lab file.
 
-    **PRO/Corporate only.** Listed as a separate toggleable feature
+    **PRO only.** Listed as a separate toggleable feature
     ("Export/Import configs or config packs to local PC") on EVE-NG's own
     official comparison page. Confirmed live: fails unconditionally on
     Community -- across VPCS and IOL, running and stopped, `config`
@@ -1932,7 +1932,7 @@ async def export_node(client: EvengClient, lab_path: str, node_id: int | None = 
         return {
             "status": "error",
             "message": (
-                "Exporting node config is a PRO/Corporate-only EVE-NG feature -- listed "
+                "Exporting node config is a PRO-only EVE-NG feature -- listed "
                 "as a separate toggleable feature on EVE-NG's own official comparison "
                 "page, and confirmed live to fail unconditionally on Community "
                 "regardless of node type or state. This server is running Community "
@@ -2490,7 +2490,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
         async def _export_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
             """Export one node's (or all nodes') running config into the saved lab file.
 
-            **PRO/Corporate only** -- listed as a separate toggleable
+            **PRO only** -- listed as a separate toggleable
             feature on EVE-NG's own official comparison page, and
             confirmed live to fail unconditionally on Community
             regardless of node type or state. Checks the server's
