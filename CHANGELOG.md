@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-31
+
+### Documentation
+- **`/etc/mcp-eveng` was referenced as a suggested path in 6 places
+  across `.env.example`/`.env.capture-relay.example` (TLS certs, TLS
+  keys, SSH `known_hosts`) but never actually documented anywhere** --
+  no instructions existed to create it or set correct ownership/
+  permissions. Added a new step 5 to `install-linux.md`'s systemd
+  section (`mkdir`/`chown mcp-eveng:mcp-eveng`/`chmod 750`, private
+  key files specifically `600`), with a note that `ProtectSystem=strict`
+  doesn't block *reading* from there -- only writing, which this
+  directory is never used for -- so no systemd unit change is needed.
+  `docs/capture-relay.md` and every `.env.example`/
+  `.env.capture-relay.example` comment suggesting this path now points
+  back to that step. `install-windows.md` needs nothing -- no systemd
+  section, and `/etc/mcp-eveng` is a Linux-specific convention anyway.
+
+### Fixed
+- **`eve-capture.bat`'s curl calls could silently resolve to Windows'
+  own bundled Schannel-based `curl.exe` instead of a working
+  alternative** -- confirmed live: Windows' `curl.exe` (Schannel, its
+  native TLS stack) fails against this relay over HTTPS with a cryptic
+  `schannel: next InitializeSecurityContext failed:
+  SEC_E_INTERNAL_ERROR`, while the official curl.se Windows build
+  (a different TLS backend) connects to the exact same server without
+  issue -- a genuine Windows/Schannel-level quirk, not specific to
+  this project (the identical error shows up against totally unrelated
+  HTTPS servers on affected machines, confirmed via a live test
+  against `https://www.google.com`). All three curl invocations
+  (availability check, preflight, real stream) now use a new
+  configurable `CURL` variable, matching the existing `WIRESHARK`/
+  `PLINK` pattern -- an explicit full path by default, not a bare
+  `curl.exe` relying on `PATH`, since `PATH` order can silently
+  resolve back to Windows' own Schannel-based curl even after
+  installing a working alternative, reintroducing the exact same
+  failure with no obvious cause.
+- **`python-dotenv` silently corrupts Windows paths inside
+  double-quoted `.env` values** -- confirmed live, hit by a real
+  Windows user: a path like `"C:\path\to\...\certs\newkey.pem"` parses
+  back with an actual TAB character where `\to\` was and an actual
+  NEWLINE where `\new...` was, since `\t`/`\n`/etc. are recognized
+  escape sequences inside double-quoted values, not literal
+  backslash-letter text. Windows paths can't contain control
+  characters, so this then fails deep inside OpenSSL's
+  `load_cert_chain()` with the exact same unhelpful `OSError: [Errno
+  22] Invalid argument` as the previous entry below -- two genuinely
+  different root causes producing an identical, unhelpful symptom, only
+  told apart by directly reproducing the corruption with a synthetic
+  `.env` file matching the real path's shape and confirming the actual
+  control characters land in the parsed value. Fixed with a validator
+  on every `*_PATH` settings field across both processes
+  (`MCP_TLS_CERT_PATH`/`_KEY_PATH`, `CAPTURE_RELAY_TLS_CERT_PATH`/
+  `_KEY_PATH`, `CAPTURE_SSH_KEY_PATH`, `CAPTURE_SSH_KNOWN_HOSTS`) that
+  detects a literal control character in the value and explains
+  exactly what happened and how to fix it (forward slashes, or single
+  quotes instead of double) -- confirmed live against the exact
+  corruption pattern that caused the original report. Also documented
+  prominently in `.env.example`, `.env.capture-relay.example`, and
+  `install-windows.md`, so Windows users can avoid this happening in
+  the first place rather than needing to hit and diagnose it. 12 new
+  tests; `ruff`/`mypy` clean.
+- **A bad TLS cert/key path (typo, missing file, wrong permissions) on
+  either `mcp-eveng` or `mcp-relay` surfaced as an utterly unhelpful
+  `OSError: [Errno 22] Invalid argument`, deep inside OpenSSL's own
+  `load_cert_chain()`, with no indication of which of the two files
+  was the problem or what was actually wrong with it** -- hit live: a
+  single missing path segment in `CAPTURE_RELAY_TLS_KEY_PATH`
+  (`certskey.pem` instead of `certs\key.pem`) produced this exact
+  cryptic error with nothing pointing at the actual typo. Root cause
+  confirmed by researching the exact error/traceback signature: this
+  is a known, generic failure mode of Python's `ssl` module on a bad
+  path or an encrypted key with no password supplied, not specific to
+  this project's own code, and not something a clearer message from
+  `uvicorn`/OpenSSL could be coaxed out of after the fact. Fixed by
+  adding a pre-flight check, in both `server.py`'s `_run_networked`
+  and `capture_relay/__main__.py`'s `main()`, that opens each
+  configured TLS file itself before ever reaching `uvicorn.Config`/
+  `uvicorn.run` -- on failure, prints a clear message naming the exact
+  variable (`MCP_TLS_CERT_PATH`/`_KEY_PATH` or
+  `CAPTURE_RELAY_TLS_CERT_PATH`/`_KEY_PATH`) and the exact path, then
+  exits cleanly (code 1, no traceback) rather than letting the
+  original cryptic `OSError` propagate. Confirmed live on both
+  processes: a bad path now exits immediately with a clear message; a
+  valid cert/key pair still works exactly as before. 11 new tests
+  (both the check function directly and that `main()`/`_run_networked`
+  genuinely call it before touching uvicorn, not just that the check
+  works in isolation) -- two pre-existing tests were using fake,
+  non-existent example paths for their TLS settings and needed
+  updating to real temp files once this check started actually
+  opening them. 610 passed; `ruff`/`mypy` clean.
+
+### Added
+- **`CAPTURE_RELAY_LOG_LEVEL` for the standalone relay** -- confirmed
+  it had no log-level configuration at all (no `logging.basicConfig()`
+  anywhere in `capture_relay/`, and `uvicorn.run()` never passed a
+  `log_level`, so it silently used uvicorn's own built-in default,
+  `"info"`, with no way to change it). Adding it to the relay's `.env`
+  before this had zero effect -- confirmed the settings model uses
+  `extra="ignore"`, so it wouldn't even error, just be silently
+  dropped. Matches the main `mcp-eveng` process's own
+  `MCP_LOG_LEVEL` pattern exactly (same validation, same default,
+  same `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` set) but under its
+  own `CAPTURE_RELAY_` prefix, consistent with this settings class's
+  other fields (`_LISTEN_HOST`, `_TLS_*`) -- drives both
+  `logging.basicConfig()` (this process's own log statements) and
+  `uvicorn.run(..., log_level=...)` (uvicorn's own access/error logs)
+  separately, since they're genuinely two different mechanisms.
+  Confirmed live against a real running relay: a `DEBUG`-level line
+  appears with `CAPTURE_RELAY_LOG_LEVEL=DEBUG` set and is correctly
+  absent at the default `INFO` level. 6 new tests; `ruff`/`mypy` clean.
+
 ## [0.5.0] - 2026-08-31
 
 ### Fixed

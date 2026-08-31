@@ -258,3 +258,30 @@ def test_tls_key_password_optional_alongside_cert_and_key() -> None:
     )
     assert settings.tls_key_password is not None
     assert settings.tls_key_password.get_secret_value() == "hunter2"
+
+
+def test_tls_cert_path_windows_backslash_corruption_is_caught() -> None:
+    """Regression test for a real, confirmed bug: python-dotenv silently
+    turns \\t/\\n/etc. inside a DOUBLE-quoted .env value into actual
+    control characters -- a Windows path like "C:\\to\\..." parses back
+    with a literal TAB where \\t was. Reproduced live: this then fails
+    deep inside OpenSSL's load_cert_chain with an unhelpful "OSError:
+    [Errno 22] Invalid argument", giving no hint of the real cause."""
+    corrupted = "C:\tfolder\\certs\\cert.pem"  # literal tab, as dotenv would produce from "C:\to..."
+    with pytest.raises(ValueError, match=r"MCP_TLS_CERT_PATH contains a literal \\t"):
+        MCPTransportSettings(tls_cert_path=corrupted, tls_key_path="/etc/key.pem", _env_file=None)
+
+
+def test_tls_key_path_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\\path\\to\\key\nfile.pem"  # literal newline, as dotenv would produce from "\new..."
+    with pytest.raises(ValueError, match=r"MCP_TLS_KEY_PATH contains a literal \\n"):
+        MCPTransportSettings(tls_cert_path="/etc/cert.pem", tls_key_path=corrupted, _env_file=None)
+
+
+def test_tls_path_corruption_check_passes_normal_windows_paths_with_forward_slashes() -> None:
+    settings = MCPTransportSettings(
+        tls_cert_path="C:/path/to/cert.pem",
+        tls_key_path="C:/path/to/key.pem",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert settings.tls_cert_path == "C:/path/to/cert.pem"

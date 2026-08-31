@@ -109,3 +109,71 @@ def test_relay_tls_cert_without_key_is_rejected() -> None:
 def test_relay_tls_key_without_cert_is_rejected() -> None:
     with pytest.raises(ValueError, match="CAPTURE_RELAY_TLS_CERT_PATH and CAPTURE_RELAY_TLS_KEY_PATH must both be set"):
         RelayListenSettings(tls_key_path="/etc/relay-key.pem", _env_file=None)  # type: ignore[call-arg]
+
+
+def test_relay_log_level_defaults_to_info() -> None:
+    settings = RelayListenSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.log_level == "INFO"
+
+
+def test_relay_log_level_normalizes_case() -> None:
+    settings = RelayListenSettings(log_level="debug", _env_file=None)  # type: ignore[call-arg]
+    assert settings.log_level == "DEBUG"
+
+
+def test_relay_log_level_rejects_invalid_value() -> None:
+    with pytest.raises(ValueError, match="CAPTURE_RELAY_LOG_LEVEL"):
+        RelayListenSettings(log_level="VERBOSE", _env_file=None)  # type: ignore[call-arg]
+
+
+def test_relay_tls_cert_path_windows_backslash_corruption_is_caught() -> None:
+    """Regression test for a real, confirmed bug: python-dotenv silently
+    turns \\t/\\n/etc. inside a DOUBLE-quoted .env value into actual
+    control characters -- a Windows path like "C:\\to\\..." parses back
+    with a literal TAB where \\t was. Reproduced live: this then fails
+    deep inside OpenSSL's load_cert_chain with an unhelpful "OSError:
+    [Errno 22] Invalid argument", giving no hint of the real cause --
+    which is exactly what the tester hit for a real relay TLS key path."""
+    corrupted = "C:\tfolder\\certs\\cert.pem"  # literal tab, as dotenv would produce from "C:\to..."
+    with pytest.raises(ValueError, match=r"CAPTURE_RELAY_TLS_CERT_PATH contains a literal \\t"):
+        RelayListenSettings(tls_cert_path=corrupted, tls_key_path="/etc/relay-key.pem", _env_file=None)
+
+
+def test_relay_tls_key_path_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\\path\\to\\key\nfile.pem"  # literal newline, as dotenv would produce from "\new..."
+    with pytest.raises(ValueError, match=r"CAPTURE_RELAY_TLS_KEY_PATH contains a literal \\n"):
+        RelayListenSettings(tls_cert_path="/etc/relay-cert.pem", tls_key_path=corrupted, _env_file=None)
+
+
+def test_relay_tls_path_corruption_check_passes_normal_windows_paths_with_forward_slashes() -> None:
+    settings = RelayListenSettings(
+        tls_cert_path="C:/path/to/cert.pem",
+        tls_key_path="C:/path/to/key.pem",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert settings.tls_cert_path == "C:/path/to/cert.pem"
+
+
+def test_ssh_key_path_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\tfolder\\key.ppk"  # literal tab, as dotenv would produce from "C:\to..."
+    with pytest.raises(ValueError, match=r"CAPTURE_SSH_KEY_PATH contains a literal \\t"):
+        CaptureSSHSettings(
+            ssh_host="192.168.1.50",
+            ssh_username="capture-svc",
+            ssh_key_path=corrupted,
+            token_secret="s3cret",
+            _env_file=None,
+        )
+
+
+def test_ssh_known_hosts_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\\path\\to\\known_hosts\nfile"  # literal newline, as dotenv would produce from "\new..."
+    with pytest.raises(ValueError, match=r"CAPTURE_SSH_KNOWN_HOSTS contains a literal \\n"):
+        CaptureSSHSettings(
+            ssh_host="192.168.1.50",
+            ssh_username="capture-svc",
+            ssh_key_path="/etc/mcp-eveng/capture-relay.key",
+            ssh_known_hosts=corrupted,
+            token_secret="s3cret",
+            _env_file=None,
+        )

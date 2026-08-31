@@ -338,35 +338,43 @@ def test_run_networked_passes_no_ssl_kwargs_when_tls_unconfigured(monkeypatch) -
     assert captured["ssl_keyfile"] is None
 
 
-def test_run_networked_passes_ssl_kwargs_when_tls_configured(monkeypatch) -> None:
+def test_run_networked_passes_ssl_kwargs_when_tls_configured(monkeypatch, tmp_path) -> None:
     import mcp_eveng.server as server_module
 
     captured = _install_fake_uvicorn(monkeypatch)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
     settings = MCPTransportSettings(
         host="127.0.0.1",
         port=9999,
-        tls_cert_path="/etc/cert.pem",
-        tls_key_path="/etc/key.pem",
+        tls_cert_path=str(cert),
+        tls_key_path=str(key),
         _env_file=None,  # type: ignore[call-arg]
     )
     mcp = create_server(settings, "streamable-http")
 
     server_module._run_networked(mcp, settings, "streamable-http")
 
-    assert captured["ssl_certfile"] == "/etc/cert.pem"
-    assert captured["ssl_keyfile"] == "/etc/key.pem"
+    assert captured["ssl_certfile"] == str(cert)
+    assert captured["ssl_keyfile"] == str(key)
     assert captured["ssl_keyfile_password"] is None
 
 
-def test_run_networked_passes_tls_key_password_when_set(monkeypatch) -> None:
+def test_run_networked_passes_tls_key_password_when_set(monkeypatch, tmp_path) -> None:
     import mcp_eveng.server as server_module
 
     captured = _install_fake_uvicorn(monkeypatch)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
     settings = MCPTransportSettings(
         host="127.0.0.1",
         port=9999,
-        tls_cert_path="/etc/cert.pem",
-        tls_key_path="/etc/key.pem",
+        tls_cert_path=str(cert),
+        tls_key_path=str(key),
         tls_key_password="hunter2",
         _env_file=None,  # type: ignore[call-arg]
     )
@@ -487,3 +495,82 @@ def test_run_networked_keyboard_interrupt_still_handled_gracefully(monkeypatch, 
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert "Goodbye" in captured.err
+
+
+# ============================================================================
+# _check_tls_files_readable -- confirmed live (same check as the relay's own
+# capture_relay/__main__.py): a bad TLS path reaching OpenSSL's
+# load_cert_chain() unchecked surfaces as an utterly unhelpful "OSError:
+# [Errno 22] Invalid argument", with no indication of which file or what's
+# wrong.
+# ============================================================================
+
+
+def test_check_tls_files_readable_passes_when_both_unset() -> None:
+    import mcp_eveng.server as server_module
+
+    server_module._check_tls_files_readable(None, None)  # must not raise
+
+
+def test_check_tls_files_readable_passes_for_real_readable_files(tmp_path) -> None:
+    import mcp_eveng.server as server_module
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
+
+    server_module._check_tls_files_readable(str(cert), str(key))  # must not raise
+
+
+def test_check_tls_files_readable_exits_clearly_on_missing_cert(tmp_path, capsys) -> None:
+    import mcp_eveng.server as server_module
+
+    key = tmp_path / "key.pem"
+    key.write_text("fake key content")
+    missing_cert = tmp_path / "does_not_exist.pem"
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_module._check_tls_files_readable(str(missing_cert), str(key))
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "MCP_TLS_CERT_PATH" in captured.err
+    assert str(missing_cert) in captured.err
+
+
+def test_check_tls_files_readable_exits_clearly_on_missing_key(tmp_path, capsys) -> None:
+    import mcp_eveng.server as server_module
+
+    cert = tmp_path / "cert.pem"
+    cert.write_text("fake cert content")
+    missing_key = tmp_path / "does_not_exist.pem"
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_module._check_tls_files_readable(str(cert), str(missing_key))
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "MCP_TLS_KEY_PATH" in captured.err
+    assert str(missing_key) in captured.err
+
+
+def test_run_networked_exits_cleanly_before_uvicorn_when_tls_cert_unreadable(monkeypatch, tmp_path) -> None:
+    """Confirms _run_networked actually calls the check before
+    uvicorn.Config, not just that the check function works in isolation."""
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(
+        host="127.0.0.1",
+        port=9999,
+        tls_cert_path=str(tmp_path / "missing_cert.pem"),
+        tls_key_path=str(tmp_path / "missing_key.pem"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    mcp = create_server(settings, "streamable-http")
+
+    with pytest.raises(SystemExit):
+        server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert "app" not in captured

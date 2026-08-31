@@ -162,6 +162,31 @@ class _APIKeyMiddleware:
         await self._app(scope, receive, send)
 
 
+def _check_tls_files_readable(cert_path: str | None, key_path: str | None) -> None:
+    """Raise a clear, actionable error before uvicorn ever gets a chance
+    to try. Confirmed live (against the relay's identical check -- see
+    `capture_relay/__main__.py`): a bad path (a typo, a missing file,
+    wrong permissions) passed to OpenSSL's `load_cert_chain()` surfaces
+    as an utterly unhelpful `OSError: [Errno 22] Invalid argument`, with
+    nothing indicating which of the two files is the problem or what's
+    actually wrong with it -- opening each file ourselves catches the
+    same underlying OS errors (missing, wrong type, unreadable) with a
+    message that actually says which variable and which path.
+    """
+    for path, var_name in (
+        (cert_path, "MCP_TLS_CERT_PATH"),
+        (key_path, "MCP_TLS_KEY_PATH"),
+    ):
+        if path is None:
+            continue
+        try:
+            with open(path, "rb") as f:
+                f.read(1)
+        except OSError as e:
+            print(f"{var_name} could not be read ({e.strerror or e}): {path!r}", file=sys.stderr)
+            raise SystemExit(1) from None
+
+
 def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Transport) -> None:
     """Serve `--sse`/`--http` ourselves, not via `FastMCP.run()` -- see this
     module's docstring for why."""
@@ -179,6 +204,8 @@ def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Tran
         logger.info("Serving over HTTPS (MCP_TLS_CERT_PATH/MCP_TLS_KEY_PATH are set).")
     else:
         logger.info("Serving over plain HTTP (MCP_TLS_CERT_PATH/MCP_TLS_KEY_PATH unset).")
+
+    _check_tls_files_readable(settings.tls_cert_path, settings.tls_key_path)
 
     config = uvicorn.Config(
         app,

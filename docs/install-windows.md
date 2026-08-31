@@ -58,6 +58,16 @@ Ctrl+C stops a foreground server cleanly.
   Binding to `0.0.0.0` may trigger a Windows Firewall prompt; allow it
   on your local/private network profile.
 
+**For any `*_PATH` variable in `.env`** (`MCP_TLS_CERT_PATH`,
+`CAPTURE_SSH_KEY_PATH`, etc.), **use forward slashes**
+(`"C:/path/to/file"`) instead of backslashes. A backslash immediately
+followed by certain letters (`\t`, `\n`, `\r`, and a few others) inside
+a double-quoted `.env` value gets silently turned into an actual
+tab/newline/etc. character by `.env`'s own parsing — confirmed live: a
+path containing `\to\` or `\new...` breaks exactly this way. This
+project now catches and clearly reports the corruption if it happens,
+but forward slashes avoid it happening at all.
+
 ## Using it with Claude Desktop / Claude Code (stdio)
 
 Point `command` at your venv's Python interpreter directly (not the

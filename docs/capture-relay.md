@@ -136,9 +136,16 @@ is just this app's own separate venv + `.env`, installed *from* that
 shared source above.
 
 Copy **`.env.capture-relay.example`** (project root) to `/opt/mcp_relay/.env`
-and configure it. Includes optional `CAPTURE_RELAY_TLS_CERT_PATH`/
-`_KEY_PATH` to serve this relay over HTTPS instead of plain HTTP — see
-the comments in that file.
+and configure it. `CAPTURE_RELAY_LOG_LEVEL` (default `INFO`) controls
+this process's own log verbosity — set to `DEBUG` for troubleshooting.
+Also includes optional `CAPTURE_RELAY_TLS_CERT_PATH`/`_KEY_PATH`/
+`CAPTURE_SSH_KNOWN_HOSTS` to serve this relay over HTTPS instead of
+plain HTTP, and SSH host-key checking — see the comments in that file.
+If you're using any of these, see `install-linux.md`'s systemd section
+step 5 for creating `/etc/mcp-eveng` with the right ownership/
+permissions to put the actual files in — the same shared `mcp-eveng`
+account both apps run as already has access to it, no change needed
+here.
 
 ## 6. Install and config mcp-eveng App (MCP server)
 
