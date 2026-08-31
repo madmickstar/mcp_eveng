@@ -15,7 +15,7 @@ SECRET = "test-secret-do-not-use-in-prod"
 
 def ssh_settings(**overrides) -> CaptureSSHSettings:
     defaults = dict(
-        ssh_host="172.16.130.14",
+        ssh_host="192.168.1.50",
         ssh_username="capture-svc",
         ssh_key_path="/etc/mcp-eveng/capture-relay.key",
         token_secret=SECRET,

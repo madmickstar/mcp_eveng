@@ -1,8 +1,8 @@
-"""MCP tool for EVE-NG PRO/Corporate's per-connection link-quality feature
+"""MCP tool for EVE-NG PRO's per-connection link-quality feature
 (delay/jitter/packet-loss/bandwidth), set independently on each side of a
 connection.
 
-**PRO/Corporate only.** Not available on Community at all -- confirmed
+**PRO only.** Not available on Community at all -- confirmed
 directly by the user (no GUI option exists there), and unlike most of
 this project's PRO/Community differences, there's no Community-side
 source to cross-check against for this one (link quality has no
@@ -77,7 +77,7 @@ includes `source_delay`/`source_jitter`/`source_loss`/
 `source_bandwidth` and the `destination_*` equivalents on every
 connection entry -- the same topology call this tool already makes to
 resolve the connection in the first place. (Not confirmed whether this
-holds on every PRO/Corporate version -- only tested against the one
+holds on every PRO version -- only tested against the one
 live server available -- but it's the same endpoint and same response
 shape this tool already depends on for everything else, so no new call
 is needed to use it.)
@@ -184,7 +184,7 @@ async def get_link_quality(
     """Get the current link-quality (delay/jitter/packet loss/bandwidth)
     on both sides of an existing connection -- the given node's
     interface, and whatever's connected to the opposite end, resolved
-    automatically. PRO/Corporate only.
+    automatically. PRO only.
 
     Args:
         lab_path: Full path to the .unl lab file.
@@ -203,7 +203,7 @@ async def get_link_quality(
             "status": "error",
             "message": (
                 "Link quality (delay/jitter/packet loss/bandwidth per connection) "
-                "is a PRO/Corporate-only EVE-NG feature, not available on "
+                "is a PRO-only EVE-NG feature, not available on "
                 "Community at all. This server is running Community edition, "
                 "so get_link_quality isn't available here."
             ),
@@ -402,7 +402,7 @@ async def set_link_quality(
             "status": "error",
             "message": (
                 "Link quality (delay/jitter/packet loss/bandwidth per connection) "
-                "is a PRO/Corporate-only EVE-NG feature, not available on "
+                "is a PRO-only EVE-NG feature, not available on "
                 "Community at all. This server is running Community edition, "
                 "so set_link_quality isn't available here."
             ),
@@ -576,7 +576,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Get current link-quality (delay/jitter/packet loss/
             bandwidth) on both sides of an existing connection -- the
             given node's interface, and whatever's on the opposite end,
-            resolved automatically. PRO/Corporate only.
+            resolved automatically. PRO only.
 
             Args:
                 lab_path: Full path to the .unl lab file.
@@ -614,7 +614,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             persist: bool = True,
         ) -> dict[str, Any]:
             """Set link-quality (delay/jitter/packet loss/bandwidth) on one
-            side of an existing connection. PRO/Corporate only.
+            side of an existing connection. PRO only.
 
             Args:
                 lab_path: Full path to the .unl lab file.

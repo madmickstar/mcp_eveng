@@ -1,4 +1,4 @@
-# Capture relay (PRO/Corporate only)
+# Capture relay (PRO only)
 
 Streams an EVE-NG PRO capture to a local Wireshark, without a personal
 SSH+sudo account on the EVE-NG host. Community doesn't need this — its
@@ -11,14 +11,21 @@ own GUI already generates working `capture://` links.
 - [2. Generate a key pair (MCP Server)](#2-generate-a-key-pair-mcp-server)
 - [3. Append the public key (EVE-NG host)](#3-append-the-public-key-eve-ng-host)
 - [4. Sudoers (EVE-NG host)](#4-sudoers-eve-ng-host)
-- [5. Install and config mcp-relay App (MCP server)](#5-install-and-config-mcp-relay-app-mcp-server)
-- [6. Install and config mcp-eveng App (MCP server)](#6-install-and-config-mcp-eveng-app-mcp-server)
-- [7. Create and start the systemd service](#7-create-and-start-the-systemd-service)
-- [8. Enable the tools on the main mcp-eveng process](#8-enable-the-tools-on-the-main-mcp-eveng-process)
-- [9. The `.bat` companion and Windows registration](#9-the-bat-companion-and-windows-registration)
+- [5. Add capture-relay settings to your .env](#5-add-capture-relay-settings-to-your-env)
+- [6. Create and start the systemd service (MCP server)](#6-create-and-start-the-systemd-service-mcp-server)
+- [7. Enable the tools on the main mcp-eveng process](#7-enable-the-tools-on-the-main-mcp-eveng-process)
+- [8. The `.bat` companion and Windows registration](#8-the-bat-companion-and-windows-registration)
 - [Known limitations](#known-limitations)
 
 ## Architecture
+
+`mcp-eveng` and `mcp-relay` are two different **entrypoints of the same
+package** (`mcp-eveng` and `mcp-eveng-capture-relay`, both installed by
+the same `pip install`), sharing ONE venv and ONE `.env` file — not two
+separate installs. Each process reads only the settings it cares about
+from that shared `.env` (confirmed directly: every settings class here
+uses `extra="ignore"`), so nothing needs duplicating or kept in sync
+across files anymore.
 
 ```
  EVE-NG GUI                Windows client                 Linux host
@@ -53,7 +60,7 @@ sudo useradd --system --create-home --shell /bin/bash --groups capture_relay mcp
 
 ## 2. Generate a key pair (MCP Server)
 
-Not on the EVE-NG host — on whichever machine(s) run `mcp-eveng`/`mcp-relay`.
+Not on the EVE-NG host — on whichever machine runs `mcp-eveng`/`mcp-relay`.
 
 Linux/macOS:
 
@@ -96,9 +103,8 @@ icacls "$env:USERPROFILE\.ssh" /T /C /grant:r "$($env:USERNAME):F"
 sudo -u mcp-eveng bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "PASTE_THE_PUBLIC_KEY_LINE_HERE" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-One keypair covers both `mcp-eveng` and `mcp-relay` if they run on the
-same machine. Otherwise generate one per machine and append each
-public half to the same `authorized_keys` file.
+One keypair covers both `mcp-eveng` and `mcp-relay`, since they share
+one machine and one account now.
 
 ## 4. Sudoers (EVE-NG host)
 
@@ -116,81 +122,43 @@ public half to the same `authorized_keys` file.
 Confirm `docker`/`tcpdump` paths match your host (`which docker`,
 `which tcpdump`) — sudoers matching is exact-path.
 
-## 5. Install and config mcp-relay App (MCP server)
+## 5. Add capture-relay settings to your .env
+
+Nothing new to install — `asyncssh`/`starlette`/`uvicorn` (what both
+`list_captures`/`get_capture` and the standalone relay need) are base
+dependencies of `mcp-eveng` itself, already included if you set this up
+via `install-linux.md`'s systemd section. If you haven't installed
+`mcp-eveng` yet, do that first.
+
+Your `/opt/mcp_eveng/.env` already exists from that install — this step
+just adds the capture-relay section to it (copy the relevant block from
+`.env.example`, which has it as its own clearly-labeled section):
+
+- `CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME`/`_KEY_PATH`, `CAPTURE_SSH_KNOWN_HOSTS`,
+  and `CAPTURE_TOKEN_SECRET` are read by BOTH processes — one shared
+  value each, no keeping two files in sync.
+- `CAPTURE_SSH_TIMEOUT_SECONDS`, `CAPTURE_TOKEN_TTL_SECONDS`, and
+  `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` are read only by `mcp-eveng`
+  (`list_captures`/`get_capture`).
+- `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`, and
+  `CAPTURE_RELAY_TLS_*` are read only by the standalone relay.
+
+If you're using `CAPTURE_SSH_KNOWN_HOSTS` or either `*_TLS_*` pair, see
+`install-linux.md`'s systemd section step 5 for creating
+`/etc/mcp-eveng` with the right ownership/permissions to put the actual
+files in.
+
+## 6. Create and start the systemd service (MCP server)
+
+A ready-to-use unit ships in the repo — `systemd/mcp-relay.service`:
 
 ```bash
-sudo git clone https://github.com/madmickstar/mcp_eveng.git /opt/mcp_eveng
-# skip the line above if you already have /opt/mcp_eveng from
-# install-linux.md's systemd setup
-
-sudo mkdir -p /opt/mcp_relay
-cd /opt/mcp_relay
-sudo python3 -m venv .venv
-sudo chown -R mcp-eveng:mcp-eveng /opt/mcp_relay
-sudo -u mcp-eveng /opt/mcp_relay/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
+sudo cp /opt/mcp_eveng/systemd/mcp-relay.service /etc/systemd/system/mcp-relay.service
 ```
 
-Copy **`.env.capture-relay.example`** (project root) to `/opt/mcp_relay/.env`
-and configure it.
-
-## 6. Install and config mcp-eveng App (MCP server)
-
-```bash
-sudo -u mcp-eveng /opt/mcp_eveng/.venv/bin/pip install "/opt/mcp_eveng[capture-relay]"
-```
-
-This upgrades the existing `mcp-eveng` install to add the `[capture-relay]`
-extra (`asyncssh`) it needs for `list_captures`/`get_capture` to SSH into
-the EVE-NG host directly.
-
-Copy **`.env.example`** (project root) to the main `mcp-eveng` process's
-`.env` and configure it.
-
-`CAPTURE_SSH_HOST`/`_PORT`/`_USERNAME` are identical in both `.env`
-files. `CAPTURE_SSH_KEY_PATH` is a local path per machine — only
-identical if both processes run on the same machine.
-`CAPTURE_TOKEN_SECRET` **must be the exact same value** in both —
-generate once (`openssl rand -hex 32`) and copy into both.
-
-## 7. Create and start the systemd service
-
-```bash
-sudo vi /etc/systemd/system/mcp-relay.service
-```
-
-```ini
-# /etc/systemd/system/mcp-relay.service
-
-[Unit]
-Description=Standalone relay for EVE-NG PRO capture streaming (mcp-eveng)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-
-User=mcp-eveng
-Group=mcp-eveng
-
-WorkingDirectory=/opt/mcp_relay
-ExecStart=/opt/mcp_relay/.venv/bin/mcp-eveng-capture-relay
-
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=20
-
-StandardOutput=journal
-StandardError=journal
-
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/mcp_relay
-
-[Install]
-WantedBy=multi-user.target
-```
+Same `WorkingDirectory`/`ReadWritePaths` as `mcp-eveng.service` itself
+— both processes share the one venv and one `.env` under
+`/opt/mcp_eveng`, only `ExecStart` differs between the two units.
 
 ```bash
 sudo systemctl daemon-reload
@@ -209,7 +177,7 @@ or the installed console script directly: `mcp-eveng-capture-relay`.
 No `--http` flag — reads `CAPTURE_RELAY_LISTEN_HOST`/`_PORT` from
 `.env` in the current working directory.
 
-## 8. Enable the tools on the main mcp-eveng process
+## 7. Enable the tools on the main mcp-eveng process
 
 ```bash
 # in tools.env
@@ -217,7 +185,7 @@ list_captures=enabled
 get_capture=enabled
 ```
 
-## 9. The `.bat` companion and Windows registration
+## 8. The `.bat` companion and Windows registration
 
 Edit the top of `scripts/eve-capture.bat`:
 
@@ -269,6 +237,6 @@ either app.
   match your EVE-NG host.
 - **If the `.bat`'s curl preflight fails or falls back to plink
   unexpectedly**, check: (1) is `mcp-relay.service` running? (2) do
-  `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` (main `.env`) match
-  `CAPTURE_RELAY_LISTEN_HOST`/`_PORT` (relay's `.env`)? (3) firewall
-  between the relay's host and the Windows client?
+  `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` match `CAPTURE_RELAY_LISTEN_HOST`/
+  `_PORT` (same `.env`, both read from it)? (3) firewall between the
+  relay's host and the Windows client?

@@ -15,7 +15,7 @@ from mcp_eveng.capture_relay.ssh_client import _connect_kwargs, streaming_proces
 
 def _settings(**overrides) -> CaptureSSHSettings:
     defaults = dict(
-        ssh_host="172.16.130.14",
+        ssh_host="192.168.1.50",
         ssh_username="capture-svc",
         ssh_key_path="/etc/mcp-eveng/capture-relay.key",
         token_secret="s3cret",
@@ -27,7 +27,7 @@ def _settings(**overrides) -> CaptureSSHSettings:
 def test_connect_kwargs_includes_host_port_username_and_key() -> None:
     kwargs = _connect_kwargs(_settings())
 
-    assert kwargs["host"] == "172.16.130.14"
+    assert kwargs["host"] == "192.168.1.50"
     assert kwargs["port"] == 22
     assert kwargs["username"] == "capture-svc"
     assert kwargs["client_keys"] == ["/etc/mcp-eveng/capture-relay.key"]

@@ -22,20 +22,20 @@ git clone.
 git clone https://github.com/madmickstar/mcp_eveng.git
 cd mcp_eveng
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+.venv\Scripts\pip install -e .
 ```
 
-If PowerShell blocks the activation script:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-Using `cmd.exe`: activate with `.venv\Scripts\activate.bat` instead of
-`Activate.ps1`.
+Calls the venv's own `pip` directly, without a separate activation
+step. If you're doing development work on this project itself (running
+the test suite, linting), use `.[dev]` instead of `.` in that command.
 
 ## Running
+
+Either activate the venv first (`.venv\Scripts\Activate.ps1`, or
+`.venv\Scripts\activate.bat` for `cmd.exe`) and use the bare commands
+below, or call `.venv\Scripts\mcp-eveng.exe` directly every time
+without activating -- both work identically. If PowerShell blocks the
+activation script: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
 
 ```powershell
 mcp-eveng          # stdio (default)
@@ -57,6 +57,16 @@ Ctrl+C stops a foreground server cleanly.
   `EVENG_*`/`MCP_*` — see the main README's Configuration section.
   Binding to `0.0.0.0` may trigger a Windows Firewall prompt; allow it
   on your local/private network profile.
+
+**For any `*_PATH` variable in `.env`** (`MCP_TLS_CERT_PATH`,
+`CAPTURE_SSH_KEY_PATH`, etc.), **use forward slashes**
+(`"C:/path/to/file"`) instead of backslashes. A backslash immediately
+followed by certain letters (`\t`, `\n`, `\r`, and a few others) inside
+a double-quoted `.env` value gets silently turned into an actual
+tab/newline/etc. character by `.env`'s own parsing — confirmed live: a
+path containing `\to\` or `\new...` breaks exactly this way. This
+project now catches and clearly reports the corruption if it happens,
+but forward slashes avoid it happening at all.
 
 ## Using it with Claude Desktop / Claude Code (stdio)
 
@@ -101,6 +111,22 @@ Requires [Node.js](https://nodejs.org/) (for `npx`). Bridge through
             "http://192.168.1.100:8000/mcp",
             "--allow-http"
         ]
+    }
+  }
+}
+```
+
+If `MCP_API_KEY` is set on the server (see README's Configuration
+section), add the header and switch to `https://` if TLS is also
+configured:
+
+```json
+{
+  "mcpServers": {
+    "eveng_http": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "env": { "AUTH_HEADER": "Bearer <your MCP_API_KEY value>" }
     }
   }
 }

@@ -85,7 +85,7 @@ def test_tools_env_pro_example_enables_edition_gated_tools() -> None:
 
 
 def test_tools_env_comm_example_disables_edition_gated_tools() -> None:
-    # export_node/share_lab are PRO/Corporate-only -- confirmed against
+    # export_node/share_lab are PRO-only -- confirmed against
     # EVE-NG's own official features-compare page, live testing, and
     # direct manual testing against a real Community server (see the
     # README's "PRO vs Community differences" section) -- disabled here

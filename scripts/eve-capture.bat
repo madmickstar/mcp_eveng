@@ -4,22 +4,11 @@ REM eve-capture.bat -- registered against the capture:// protocol handler
 REM (same Windows registry mechanism Community's own capture:// links
 REM already use). Windows passes the full URL as %1.
 REM
-REM ** UNTESTED end-to-end on a real Windows machine as of writing --
-REM ** confirmed live so far: (1) the & query separator broke parsing
-REM ** under cmd.exe, (2) even after switching to ;, the argument still
-REM ** came through truncated. Both fixed by dropping the query string
-REM ** entirely for plain /-separated path segments (see below). (3) A
-REM ** binary encoding bug in the relay itself (fixed separately, see
-REM ** capture_relay/ssh_client.py). A real capture has now reached
-REM ** Wireshark successfully at least once -- which of curl/relay vs.
-REM ** the plink fallback actually delivered it is still being confirmed
-REM ** (see docs/capture-relay.md); plink was also missing its -i key
-REM ** flag entirely until just now, so if it WAS the fallback that
-REM ** delivered it, that specific run must have used a different auth
-REM ** method (e.g. Pageant) than what this script explicitly passed.
-REM ** Community mode's actual command block below is copied from a
-REM ** real, working Community .bat (not reconstructed) but hasn't been
-REM ** exercised through THIS wrapper script live yet.
+REM ** Confirmed working end-to-end, live: stopping the relay mid-stream
+REM ** (cleanly breaks the stream), curl-based streaming on PRO,
+REM ** plink-based streaming on PRO (the fallback path), and plink-based
+REM ** streaming on Community -- see CHANGELOG.md's [0.3.17] entry for
+REM ** the full history of what was found and fixed getting here.
 REM
 REM Two link shapes, distinguished by the FIRST path segment, not a
 REM query field -- EVE-NG has no "mode" concept of its own; that was
@@ -35,11 +24,38 @@ REM
 REM CONFIGURE THESE FOR YOUR ENVIRONMENT:
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
 set PLINK=C:\Program Files\PuTTY\plink.exe
+REM Windows' own bundled curl.exe uses Schannel (Windows' native TLS
+REM stack), which has been confirmed live to fail against this relay
+REM over HTTPS with a cryptic "schannel: next InitializeSecurityContext
+REM failed: SEC_E_INTERNAL_ERROR" -- a Windows/Schannel-level issue, not
+REM specific to this project (the exact same error shows up against
+REM totally unrelated HTTPS servers on affected machines). The official
+REM curl.se Windows build (a different TLS backend) does not have this
+REM problem -- download it from https://curl.se/windows/, extract it
+REM somewhere, and point this at its curl.exe explicitly. An explicit
+REM full path here, not a bare "curl.exe" relying on PATH, is
+REM deliberate: PATH order can silently resolve back to Windows' own
+REM Schannel-based curl.exe even after installing a different one,
+REM reintroducing the exact same failure with no obvious cause.
+set CURL=C:\curl\bin\curl.exe
+REM "http" (default) or "https" -- must match whatever CAPTURE_RELAY_TLS_*
+REM is set to in the relay's own .env (see docs/capture-relay.md step 5).
+REM Every curl call below always passes -k/--insecure regardless of this
+REM setting -- a no-op on plain http, but needed for https against a
+REM self-signed cert, which is the realistic case for a relay on a
+REM private/lab network. Use a CA-signed cert instead if you want that
+REM checked for real.
+set RELAY_SCHEME=http
+REM Preflight timeout, in seconds -- see the longer comment further down
+REM at the actual curl call for what each one bounds and why. Widen both
+REM if your own relay's real round-trip is slower than this.
+set RELAY_CONNECT_TIMEOUT=5
+set RELAY_MAX_TIME=5
 REM Separate username/key pairs for the two plink paths -- don't assume
 REM they're the same account, since they authenticate against
 REM genuinely different things: PRO_SSH_* is this project's own
 REM dedicated relay-fallback account (sudo docker exec ... dumpcap --
-REM see docs/capture-relay.md step 1/3); COMMUNITY_SSH_* is whatever
+REM see docs/capture-relay.md step 1/4); COMMUNITY_SSH_* is whatever
 REM account your existing, separate Community setup already uses.
 set PRO_SSH_USER=eve-pro-user
 set PRO_SSH_KEY=%HOMEPATH%\.ssh\eve-pro.ppk
@@ -108,6 +124,8 @@ if "%TOKEN%"=="" (
     exit /b 1
 )
 
+title EVE Capture - %CONTAINER%
+
 set "RELAYHOST=%URLHOST%"
 
 REM --- Primary path: curl against the relay (no SSH creds needed) ---
@@ -117,8 +135,7 @@ REM here (a well-known cmd.exe fragility trap -- jumping into or out of
 REM a block that's already been tokenized as one unit can behave
 REM unpredictably) -- flag variables and straight-line if-blocks instead.
 set "HAVECURL=0"
-where curl.exe >nul 2>nul
-if %ERRORLEVEL%==0 set "HAVECURL=1"
+if exist "%CURL%" set "HAVECURL=1"
 
 set "CURLOK=0"
 if "%HAVECURL%"=="1" (
@@ -157,11 +174,12 @@ if "%HAVECURL%"=="1" (
     REM this window -- observed a preflight timeout at ~3004ms followed
     REM immediately by Wireshark receiving a real, successful capture
     REM moments later (via the real, unbounded stream call below, which
-    REM has no such tight deadline). Widened accordingly; adjust further
-    REM if your own environment's round-trip is consistently slower or
-    REM faster than this.
+    REM has no such tight deadline). Widened once already; RELAY_CONNECT_TIMEOUT/
+    REM RELAY_MAX_TIME above are set back to 5s/5s by request -- widen
+    REM them again if your own environment's round-trip is consistently
+    REM slower than that.
     set "HDRFILE=%TEMP%\eve_capture_preflight_%RANDOM%.tmp"
-    curl.exe -s -S --connect-timeout 5 --max-time 10 -D "!HDRFILE!" -o nul "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
+    "%CURL%" -s -S -k --connect-timeout %RELAY_CONNECT_TIMEOUT% --max-time %RELAY_MAX_TIME% -D "!HDRFILE!" -o nul "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
     if exist "!HDRFILE!" (
         findstr /C:" 200 " "!HDRFILE!" >nul 2>nul
         if !ERRORLEVEL!==0 set "CURLOK=1"
@@ -171,7 +189,7 @@ if "%HAVECURL%"=="1" (
 )
 
 if "%CURLOK%"=="1" (
-    curl.exe -s -N "http://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%" | "%WIRESHARK%" -k -i -
+    "%CURL%" -s -N -k "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%" | "%WIRESHARK%" -k -i -
     exit /b 0
 )
 
@@ -230,8 +248,8 @@ REM
 REM One deliberate difference from that real original: it authenticated
 REM as root (so no sudo needed for tcpdump's raw-capture privileges);
 REM this deployment authenticates as a non-root account via the
-REM capture_relay group instead (step 1/3), so sudo IS required here.
-REM Matches the sudoers rule from step 3:
+REM capture_relay group instead (step 1/4), so sudo IS required here.
+REM Matches the sudoers rule from step 4:
 REM     %capture_relay ALL=(root) NOPASSWD: /usr/bin/tcpdump -U -i * -s 0 -w -*
 REM (note the trailing * after "-w -" -- needed because of %FILTER%
 REM below: sudoers matches a command exactly unless its own spec ends in
@@ -239,6 +257,8 @@ REM a wildcard, and the pnet0 case appends " not port 22" after "-w -".)
 REM ---------------------------------------------------------------------
 set "FILTER="
 if "%URLPATH%"=="pnet0" set "FILTER= not port 22"
+
+title EVE Capture - %URLPATH%
 
 "%PLINK%" -ssh -batch -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 REM Password-based alternative -- uncomment this line and comment out

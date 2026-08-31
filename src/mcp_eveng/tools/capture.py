@@ -2,7 +2,7 @@
 what's currently running, and minting a one-time `capture://` URL to
 stream one to a local Wireshark via the standalone relay.
 
-**PRO/Corporate only**, same as `tools/quality.py`. Community's own GUI
+**PRO only**, same as `tools/quality.py`. Community's own GUI
 already generates working `capture://` links today (confirmed live --
 `capture://<eveng-host>/<device-name>`) with no MCP involvement needed
 at all; this module exists only for PRO, where the GUI instead forces
@@ -61,14 +61,14 @@ RunCommand = Callable[[CaptureSSHSettings, str], Awaitable[str]]
 
 async def _require_pro(client: EvengClient) -> dict[str, Any] | None:
     """Shared edition gate for both tools below. Returns an error dict
-    if the server isn't PRO/Corporate, else None."""
+    if the server isn't PRO, else None."""
     status_result = await client.get_status()
     status_data = status_result.get("data") if isinstance(status_result, dict) else None
     if not is_pro_edition(status_data if isinstance(status_data, dict) else {}):
         return {
             "status": "error",
             "message": (
-                "Capture container listing/streaming is a PRO/Corporate-only "
+                "Capture container listing/streaming is a PRO-only "
                 "feature -- Community's capture:// links already work "
                 "unmodified via its own GUI and need no MCP tool at all. "
                 "This server is running Community edition, so this tool "
@@ -81,19 +81,21 @@ async def _require_pro(client: EvengClient) -> dict[str, Any] | None:
 def _require_asyncssh() -> dict[str, Any] | None:
     """Checked before any SSH work -- gives a clear, actionable error
     instead of a raw ModuleNotFoundError bubbling out of an MCP tool
-    call when the optional `capture-relay` extra isn't installed.
-    Confirmed live: importing this module never requires asyncssh
-    (ssh_client.py imports it lazily), but actually calling
-    list_captures/get_capture obviously does."""
+    call, on the off chance asyncssh is somehow missing. Confirmed live:
+    importing this module never requires asyncssh (ssh_client.py imports
+    it lazily), but actually calling list_captures/get_capture obviously
+    does. asyncssh is a base dependency of mcp-eveng (no longer an
+    optional extra -- see pyproject.toml), so this should only ever
+    trigger on a broken or incomplete install, not a genuinely missing,
+    expected-to-be-optional piece."""
     if not _ssh_client.is_available():
         return {
             "status": "error",
             "message": (
-                "This feature requires the optional 'capture-relay' extra "
-                '-- run `pip install -e ".[capture-relay]"` (or just '
-                "`pip install asyncssh` for this side; Starlette/uvicorn "
-                "are only needed by the standalone relay itself, not by "
-                "list_captures/get_capture)."
+                "asyncssh isn't installed, but it's a base dependency of "
+                "mcp-eveng -- this usually means a broken or incomplete "
+                "install. Try `pip install --force-reinstall mcp-eveng` "
+                "(or `pip install asyncssh` directly as a quick fix)."
             ),
         }
     return None
@@ -255,7 +257,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """List every currently-running EVE-NG capture container
             (started via the GUI's right-click "Capture" menu), oldest
             first, with a position number for use with get_capture.
-            PRO/Corporate only.
+            PRO only.
             """
             return await list_captures(await get_client(), get_capture_ssh_settings())
 
@@ -267,7 +269,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             container: str | None = None,
         ) -> dict[str, Any]:
             """Mint a one-time capture:// URL to stream one running
-            capture to a local Wireshark. PRO/Corporate only.
+            capture to a local Wireshark. PRO only.
 
             Args:
                 position: 1-based position from a recent list_captures

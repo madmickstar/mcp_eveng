@@ -1,0 +1,38 @@
+# mcp-eveng.service -- the main MCP tool server.
+#
+# Copy to /etc/systemd/system/mcp-eveng.service, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl start mcp-eveng.service
+#   sudo systemctl enable mcp-eveng.service
+#
+# See docs/install-linux.md's systemd section for the account/venv/.env
+# setup this unit assumes already exists.
+
+[Unit]
+Description=MCP server for EVE-NG network emulator automation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=mcp-eveng
+Group=mcp-eveng
+
+WorkingDirectory=/opt/mcp_eveng
+ExecStart=/opt/mcp_eveng/.venv/bin/mcp-eveng --http
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/mcp_eveng
+
+[Install]
+WantedBy=multi-user.target

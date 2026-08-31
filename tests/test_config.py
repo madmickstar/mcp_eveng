@@ -38,27 +38,27 @@ def test_verify_ssl_defaults_false() -> None:
 
 
 def test_host_rejects_url_with_scheme() -> None:
-    # Regression: EVENG_HOST="https://172.16.130.14" produced a cryptic
+    # Regression: EVENG_HOST="https://192.168.1.50" produced a cryptic
     # "getaddrinfo failed" deep inside an HTTP call instead of a clear error,
     # because the scheme silently became part of the request hostname.
     with pytest.raises(ValueError, match="EVENG_HOST must be a bare hostname or IP"):
-        EvengSettings(host="https://172.16.130.14", _env_file=None)  # type: ignore[call-arg]
+        EvengSettings(host="https://192.168.1.50", _env_file=None)  # type: ignore[call-arg]
 
 
 def test_host_rejects_url_with_scheme_via_real_env_var(monkeypatch) -> None:
-    monkeypatch.setenv("EVENG_HOST", "https://172.16.130.14")
+    monkeypatch.setenv("EVENG_HOST", "https://192.168.1.50")
     with pytest.raises(ValueError, match="EVENG_HOST must be a bare hostname or IP"):
         EvengSettings(_env_file=None)  # type: ignore[call-arg]
 
 
 def test_host_error_message_suggests_the_fix() -> None:
-    with pytest.raises(ValueError, match=r"EVENG_HOST='172\.16\.130\.14'.*EVENG_PROTOCOL='https'"):
-        EvengSettings(host="https://172.16.130.14/", _env_file=None)  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match=r"EVENG_HOST='192\.168\.1\.50'.*EVENG_PROTOCOL='https'"):
+        EvengSettings(host="https://192.168.1.50/", _env_file=None)  # type: ignore[call-arg]
 
 
 def test_bare_host_without_scheme_is_unaffected() -> None:
-    settings = EvengSettings(host="172.16.130.14", _env_file=None)  # type: ignore[call-arg]
-    assert settings.host == "172.16.130.14"
+    settings = EvengSettings(host="192.168.1.50", _env_file=None)  # type: ignore[call-arg]
+    assert settings.host == "192.168.1.50"
 
 
 # -- MCPTransportSettings ------------------------------------------------
@@ -208,3 +208,80 @@ def test_stateful_can_be_disabled(monkeypatch) -> None:
     monkeypatch.setenv("MCP_STATEFUL", "false")
     settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
     assert settings.stateful is False
+
+
+def test_api_key_defaults_to_unset() -> None:
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.api_key is None
+
+
+def test_api_key_can_be_set(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_API_KEY", "secret-key-123")
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.api_key is not None
+    assert settings.api_key.get_secret_value() == "secret-key-123"
+
+
+def test_tls_cert_and_key_default_to_unset() -> None:
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.tls_cert_path is None
+    assert settings.tls_key_path is None
+    assert settings.tls_key_password is None
+
+
+def test_tls_cert_and_key_can_be_set_together() -> None:
+    settings = MCPTransportSettings(
+        tls_cert_path="/etc/cert.pem",
+        tls_key_path="/etc/key.pem",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert settings.tls_cert_path == "/etc/cert.pem"
+    assert settings.tls_key_path == "/etc/key.pem"
+
+
+def test_tls_cert_without_key_is_rejected() -> None:
+    with pytest.raises(ValueError, match="MCP_TLS_CERT_PATH and MCP_TLS_KEY_PATH must both be set"):
+        MCPTransportSettings(tls_cert_path="/etc/cert.pem", _env_file=None)  # type: ignore[call-arg]
+
+
+def test_tls_key_without_cert_is_rejected() -> None:
+    with pytest.raises(ValueError, match="MCP_TLS_CERT_PATH and MCP_TLS_KEY_PATH must both be set"):
+        MCPTransportSettings(tls_key_path="/etc/key.pem", _env_file=None)  # type: ignore[call-arg]
+
+
+def test_tls_key_password_optional_alongside_cert_and_key() -> None:
+    settings = MCPTransportSettings(
+        tls_cert_path="/etc/cert.pem",
+        tls_key_path="/etc/key.pem",
+        tls_key_password="hunter2",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert settings.tls_key_password is not None
+    assert settings.tls_key_password.get_secret_value() == "hunter2"
+
+
+def test_tls_cert_path_windows_backslash_corruption_is_caught() -> None:
+    """Regression test for a real, confirmed bug: python-dotenv silently
+    turns \\t/\\n/etc. inside a DOUBLE-quoted .env value into actual
+    control characters -- a Windows path like "C:\\to\\..." parses back
+    with a literal TAB where \\t was. Reproduced live: this then fails
+    deep inside OpenSSL's load_cert_chain with an unhelpful "OSError:
+    [Errno 22] Invalid argument", giving no hint of the real cause."""
+    corrupted = "C:\tfolder\\certs\\cert.pem"  # literal tab, as dotenv would produce from "C:\to..."
+    with pytest.raises(ValueError, match=r"MCP_TLS_CERT_PATH contains a literal \\t"):
+        MCPTransportSettings(tls_cert_path=corrupted, tls_key_path="/etc/key.pem", _env_file=None)
+
+
+def test_tls_key_path_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\\path\\to\\key\nfile.pem"  # literal newline, as dotenv would produce from "\new..."
+    with pytest.raises(ValueError, match=r"MCP_TLS_KEY_PATH contains a literal \\n"):
+        MCPTransportSettings(tls_cert_path="/etc/cert.pem", tls_key_path=corrupted, _env_file=None)
+
+
+def test_tls_path_corruption_check_passes_normal_windows_paths_with_forward_slashes() -> None:
+    settings = MCPTransportSettings(
+        tls_cert_path="C:/path/to/cert.pem",
+        tls_key_path="C:/path/to/key.pem",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    assert settings.tls_cert_path == "C:/path/to/cert.pem"

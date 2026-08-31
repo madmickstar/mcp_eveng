@@ -742,7 +742,7 @@ async def test_eve_stop_wipe_delegate_correctly() -> None:
     client.wipe_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
 
 
-# -- export_node: PRO/Corporate-only, edition-gated -----------------------------
+# -- export_node: PRO-only, edition-gated -----------------------------
 
 
 async def test_export_node_delegates_on_pro() -> None:
@@ -756,7 +756,7 @@ async def test_export_node_delegates_on_pro() -> None:
 
 
 async def test_export_node_rejects_immediately_on_community_edition() -> None:
-    # PRO/Corporate-only, per EVE-NG's own official comparison page and
+    # PRO-only, per EVE-NG's own official comparison page and
     # confirmed live to fail unconditionally on Community -- must reject
     # before ever calling the underlying client method.
     client = AsyncMock()

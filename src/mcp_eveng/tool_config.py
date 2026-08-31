@@ -23,8 +23,8 @@ materially different risk profile than the rest of this project's tools,
 which only manage EVE-NG's own lab-topology metadata -- but is enabled by
 default like everything else here; if you'd rather it be opt-in, set
 `telnet_node=disabled` in `tools.env` yourself.
-Copy `tools.env.pro.example` (PRO/Corporate edition) or `tools.env.comm.example`
-(Community edition -- disables two PRO/Corporate-only tools,
+Copy `tools.env.pro.example` (PRO edition) or `tools.env.comm.example`
+(Community edition -- disables two PRO-only tools,
 `export_node`/`share_lab`, that can't do anything useful there) to
 `tools.env` to change any of this. See the README's "PRO vs Community
 differences" section for why those two specifically differ by edition.

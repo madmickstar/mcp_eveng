@@ -224,3 +224,353 @@ def test_run_handles_keyboard_interrupt_gracefully(monkeypatch, capsys) -> None:
     assert "Goodbye" in captured.err
     # stdout is reserved for the stdio JSON-RPC stream -- never write here.
     assert captured.out == ""
+
+
+# ============================================================================
+# _APIKeyMiddleware
+# ============================================================================
+
+
+def _make_test_app_with_middleware(api_key: str):
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    from mcp_eveng.server import _APIKeyMiddleware
+
+    async def _ok(request):  # noqa: ARG001
+        return PlainTextResponse("ok")
+
+    inner = Starlette(routes=[Route("/mcp", _ok, methods=["POST"])])
+    return _APIKeyMiddleware(inner, api_key)
+
+
+def test_api_key_middleware_rejects_missing_header() -> None:
+    from starlette.testclient import TestClient
+
+    app = _make_test_app_with_middleware("secret123")
+    client = TestClient(app)
+
+    response = client.post("/mcp")
+
+    assert response.status_code == 401
+    assert response.json() == {"error": "unauthorized"}
+
+
+def test_api_key_middleware_rejects_wrong_key() -> None:
+    from starlette.testclient import TestClient
+
+    app = _make_test_app_with_middleware("secret123")
+    client = TestClient(app)
+
+    response = client.post("/mcp", headers={"Authorization": "Bearer wrong-key"})
+
+    assert response.status_code == 401
+
+
+def test_api_key_middleware_accepts_correct_key() -> None:
+    from starlette.testclient import TestClient
+
+    app = _make_test_app_with_middleware("secret123")
+    client = TestClient(app)
+
+    response = client.post("/mcp", headers={"Authorization": "Bearer secret123"})
+
+    assert response.status_code == 200
+    assert response.text == "ok"
+
+
+def test_api_key_middleware_rejects_key_as_prefix_of_expected() -> None:
+    # A naive `==` comparison and a naive `in`/prefix check can both be
+    # fooled in different ways -- confirm a partial/prefix match of the
+    # real key is still rejected, not just an unrelated wrong key.
+    from starlette.testclient import TestClient
+
+    app = _make_test_app_with_middleware("secret123")
+    client = TestClient(app)
+
+    response = client.post("/mcp", headers={"Authorization": "Bearer secret"})
+
+    assert response.status_code == 401
+
+
+# ============================================================================
+# _run_networked
+# ============================================================================
+
+
+class _FakeUvicornServer:
+    def __init__(self, config) -> None:
+        self.config = config
+
+    async def serve(self) -> None:
+        return None
+
+
+def _install_fake_uvicorn(monkeypatch) -> dict:
+    """Patches uvicorn.Config/Server so _run_networked never actually binds
+    a socket; returns a dict the test can inspect afterward for exactly
+    what uvicorn.Config was constructed with."""
+    import uvicorn
+
+    captured: dict = {}
+
+    class _FakeConfig:
+        def __init__(self, app, **kwargs):
+            captured["app"] = app
+            captured.update(kwargs)
+
+    monkeypatch.setattr(uvicorn, "Config", _FakeConfig)
+    monkeypatch.setattr(uvicorn, "Server", _FakeUvicornServer)
+    return captured
+
+
+def test_run_networked_passes_no_ssl_kwargs_when_tls_unconfigured(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(host="127.0.0.1", port=9999, _env_file=None)  # type: ignore[call-arg]
+    mcp = create_server(settings, "streamable-http")
+
+    server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert captured["ssl_certfile"] is None
+    assert captured["ssl_keyfile"] is None
+
+
+def test_run_networked_passes_ssl_kwargs_when_tls_configured(monkeypatch, tmp_path) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
+    settings = MCPTransportSettings(
+        host="127.0.0.1",
+        port=9999,
+        tls_cert_path=str(cert),
+        tls_key_path=str(key),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    mcp = create_server(settings, "streamable-http")
+
+    server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert captured["ssl_certfile"] == str(cert)
+    assert captured["ssl_keyfile"] == str(key)
+    assert captured["ssl_keyfile_password"] is None
+
+
+def test_run_networked_passes_tls_key_password_when_set(monkeypatch, tmp_path) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
+    settings = MCPTransportSettings(
+        host="127.0.0.1",
+        port=9999,
+        tls_cert_path=str(cert),
+        tls_key_path=str(key),
+        tls_key_password="hunter2",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    mcp = create_server(settings, "streamable-http")
+
+    server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert captured["ssl_keyfile_password"] == "hunter2"
+
+
+def test_run_networked_wraps_app_in_api_key_middleware_when_configured(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(
+        host="127.0.0.1",
+        port=9999,
+        api_key="secret123",
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    mcp = create_server(settings, "streamable-http")
+
+    server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert isinstance(captured["app"], server_module._APIKeyMiddleware)
+
+
+def test_run_networked_leaves_app_unwrapped_when_no_api_key(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(host="127.0.0.1", port=9999, _env_file=None)  # type: ignore[call-arg]
+    mcp = create_server(settings, "streamable-http")
+
+    server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert not isinstance(captured["app"], server_module._APIKeyMiddleware)
+
+
+def test_run_networked_works_for_sse_transport_too(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(host="127.0.0.1", port=9999, _env_file=None)  # type: ignore[call-arg]
+    mcp = create_server(settings, "sse")
+
+    server_module._run_networked(mcp, settings, "sse")
+
+    assert captured["app"] is not None
+
+
+# ============================================================================
+# run() dispatch: stdio uses mcp.run(), sse/http use _run_networked()
+# ============================================================================
+
+
+def test_run_dispatches_streamable_http_to_run_networked(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    called_with = {}
+
+    def _fake_run_networked(mcp, settings, transport):  # noqa: ARG001
+        called_with["transport"] = transport
+
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "_run_networked", _fake_run_networked)
+
+    server_module.run("streamable-http")
+
+    assert called_with["transport"] == "streamable-http"
+
+
+def test_run_dispatches_sse_to_run_networked(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    called_with = {}
+
+    def _fake_run_networked(mcp, settings, transport):  # noqa: ARG001
+        called_with["transport"] = transport
+
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "_run_networked", _fake_run_networked)
+
+    server_module.run("sse")
+
+    assert called_with["transport"] == "sse"
+
+
+def test_run_stdio_does_not_call_run_networked(monkeypatch) -> None:
+    import mcp_eveng.server as server_module
+
+    class _FakeMCP:
+        def run(self, transport: str) -> None:
+            assert transport == "stdio"
+
+    run_networked_called = []
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "create_server", lambda settings, transport: _FakeMCP())
+    monkeypatch.setattr(server_module, "_run_networked", lambda *a, **kw: run_networked_called.append(1))
+
+    server_module.run("stdio")
+
+    assert run_networked_called == []
+
+
+def test_run_networked_keyboard_interrupt_still_handled_gracefully(monkeypatch, capsys) -> None:
+    import mcp_eveng.server as server_module
+
+    def _raise(*args, **kwargs):  # noqa: ARG001
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "_run_networked", _raise)
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_module.run("streamable-http")
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "Goodbye" in captured.err
+
+
+# ============================================================================
+# _check_tls_files_readable -- confirmed live (same check as the relay's own
+# capture_relay/__main__.py): a bad TLS path reaching OpenSSL's
+# load_cert_chain() unchecked surfaces as an utterly unhelpful "OSError:
+# [Errno 22] Invalid argument", with no indication of which file or what's
+# wrong.
+# ============================================================================
+
+
+def test_check_tls_files_readable_passes_when_both_unset() -> None:
+    import mcp_eveng.server as server_module
+
+    server_module._check_tls_files_readable(None, None)  # must not raise
+
+
+def test_check_tls_files_readable_passes_for_real_readable_files(tmp_path) -> None:
+    import mcp_eveng.server as server_module
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("fake cert content")
+    key.write_text("fake key content")
+
+    server_module._check_tls_files_readable(str(cert), str(key))  # must not raise
+
+
+def test_check_tls_files_readable_exits_clearly_on_missing_cert(tmp_path, capsys) -> None:
+    import mcp_eveng.server as server_module
+
+    key = tmp_path / "key.pem"
+    key.write_text("fake key content")
+    missing_cert = tmp_path / "does_not_exist.pem"
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_module._check_tls_files_readable(str(missing_cert), str(key))
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "MCP_TLS_CERT_PATH" in captured.err
+    assert str(missing_cert) in captured.err
+
+
+def test_check_tls_files_readable_exits_clearly_on_missing_key(tmp_path, capsys) -> None:
+    import mcp_eveng.server as server_module
+
+    cert = tmp_path / "cert.pem"
+    cert.write_text("fake cert content")
+    missing_key = tmp_path / "does_not_exist.pem"
+
+    with pytest.raises(SystemExit) as exc_info:
+        server_module._check_tls_files_readable(str(cert), str(missing_key))
+
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "MCP_TLS_KEY_PATH" in captured.err
+    assert str(missing_key) in captured.err
+
+
+def test_run_networked_exits_cleanly_before_uvicorn_when_tls_cert_unreadable(monkeypatch, tmp_path) -> None:
+    """Confirms _run_networked actually calls the check before
+    uvicorn.Config, not just that the check function works in isolation."""
+    import mcp_eveng.server as server_module
+
+    captured = _install_fake_uvicorn(monkeypatch)
+    settings = MCPTransportSettings(
+        host="127.0.0.1",
+        port=9999,
+        tls_cert_path=str(tmp_path / "missing_cert.pem"),
+        tls_key_path=str(tmp_path / "missing_key.pem"),
+        _env_file=None,  # type: ignore[call-arg]
+    )
+    mcp = create_server(settings, "streamable-http")
+
+    with pytest.raises(SystemExit):
+        server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert "app" not in captured

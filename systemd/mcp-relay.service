@@ -1,0 +1,41 @@
+# mcp-relay.service -- the standalone capture-relay service (PRO only).
+#
+# Copy to /etc/systemd/system/mcp-relay.service, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl start mcp-relay.service
+#   sudo systemctl enable mcp-relay.service
+#
+# Same WorkingDirectory/ReadWritePaths as mcp-eveng.service -- both
+# services share one venv and one .env under /opt/mcp_eveng; only
+# ExecStart differs between the two units. See docs/capture-relay.md
+# for the full setup this unit assumes already exists.
+
+[Unit]
+Description=Standalone relay for EVE-NG PRO capture streaming (mcp-eveng)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=mcp-eveng
+Group=mcp-eveng
+
+WorkingDirectory=/opt/mcp_eveng
+ExecStart=/opt/mcp_eveng/.venv/bin/mcp-eveng-capture-relay
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/mcp_eveng
+
+[Install]
+WantedBy=multi-user.target

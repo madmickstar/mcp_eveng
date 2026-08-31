@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Transport = Literal["stdio", "sse", "streamable-http"]
@@ -25,6 +25,48 @@ Transport = Literal["stdio", "sse", "streamable-http"]
 # referencing it as cls._VALID_LOG_LEVELS from inside the class body would
 # not give back the plain tuple.
 _VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+# Maps the literal character to the escape sequence a Windows path would
+# have contained before python-dotenv's own double-quote escape
+# processing corrupted it -- see _check_windows_path_corruption below.
+_CONTROL_CHAR_ESCAPES = {
+    "\t": "\\t",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\v": "\\v",
+    "\f": "\\f",
+    "\b": "\\b",
+    "\0": "\\0",
+}
+
+
+def _check_windows_path_corruption(value: str, env_var_name: str) -> None:
+    """Confirmed directly, not assumed: a Windows path like
+    `"C:\\to\\..."` or `"C:\\new\\..."` inside a DOUBLE-quoted `.env`
+    value gets its `\\t`/`\\n`/etc. silently turned into an actual
+    tab/newline/etc. character by `python-dotenv`'s own escape
+    processing -- reproduced with a synthetic `.env` file containing
+    exactly this pattern and confirmed the parsed-back value contains a
+    literal TAB where `\\t` in `\\to\\` was, and a literal NEWLINE where
+    `\\n` in `\\new...` was. Windows paths can't contain control
+    characters, so this then fails deep inside OpenSSL with an
+    unhelpful `OSError: [Errno 22] Invalid argument` -- confirmed live,
+    this is exactly what happened for a real path containing `\\to\\`
+    and `\\certs\\new...`. Catching it here gives a message that
+    actually explains what's wrong and how to fix it, instead of that
+    generic downstream error two layers removed from the real cause.
+    """
+    found = [esc for ch, esc in _CONTROL_CHAR_ESCAPES.items() if ch in value]
+    if found:
+        raise ValueError(
+            f"{env_var_name} contains a literal {', '.join(found)} character. This "
+            'usually means a Windows backslash path (e.g. "C:\\to\\..." or '
+            '"C:\\new\\...") got silently corrupted by .env\'s own double-quote '
+            "escape processing -- \\t/\\n/etc. become actual control characters, "
+            "not literal backslash-letter text. Fix: use forward slashes "
+            '("C:/path/to/...") instead of backslashes, or wrap the value in '
+            "single quotes instead of double quotes."
+        )
 
 
 class EvengSettings(BaseSettings):
@@ -119,6 +161,51 @@ class MCPTransportSettings(BaseSettings):
             "server no longer recognizes."
         ),
     )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "If set, every --sse/--http request must present it via "
+            "'Authorization: Bearer <key>', or gets a 401. Unset (default): no "
+            "API-key check at all -- only the Host-header allowlist above."
+        ),
+    )
+    tls_cert_path: str | None = Field(
+        default=None,
+        description=(
+            "Path to a TLS certificate file. Serves --sse/--http over HTTPS "
+            "instead of plain HTTP when set together with tls_key_path."
+        ),
+    )
+    tls_key_path: str | None = Field(
+        default=None,
+        description="Path to the TLS certificate's private key file. Required together with tls_cert_path.",
+    )
+    tls_key_password: SecretStr | None = Field(
+        default=None,
+        description="Password for tls_key_path, if the private key itself is encrypted.",
+    )
+
+    @model_validator(mode="after")
+    def _tls_cert_and_key_together(self) -> MCPTransportSettings:
+        if bool(self.tls_cert_path) != bool(self.tls_key_path):
+            raise ValueError(
+                "MCP_TLS_CERT_PATH and MCP_TLS_KEY_PATH must both be set, or neither -- got only one of the two."
+            )
+        return self
+
+    @field_validator("tls_cert_path", mode="after")
+    @classmethod
+    def _check_tls_cert_path_corruption(cls, v: str | None) -> str | None:
+        if v is not None:
+            _check_windows_path_corruption(v, "MCP_TLS_CERT_PATH")
+        return v
+
+    @field_validator("tls_key_path", mode="after")
+    @classmethod
+    def _check_tls_key_path_corruption(cls, v: str | None) -> str | None:
+        if v is not None:
+            _check_windows_path_corruption(v, "MCP_TLS_KEY_PATH")
+        return v
 
     @field_validator("log_level", mode="before")
     @classmethod

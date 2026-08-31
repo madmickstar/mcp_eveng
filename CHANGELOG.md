@@ -7,6 +7,286 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-31
+
+### Documentation
+- **Combining a server certificate with a CA certificate into one PEM
+  file requires the server cert FIRST, CA cert below it** — confirmed
+  directly with a real CA-signed cert pair: the reverse order fails
+  with `OSError [X509: KEY_VALUES_MISMATCH] key values mismatch`, since
+  `load_cert_chain()` matches the *first* certificate in the file
+  against the private key, not any certificate that happens to be
+  present. A universal PEM chain-file convention, not specific to this
+  project, but undocumented here until now. Added to `README.md`'s TLS
+  section and both `.env.example`'s `*_TLS_CERT_PATH` comments.
+
+### Added
+- **Ready-to-use systemd unit files** (`systemd/mcp-eveng.service`,
+  `systemd/mcp-relay.service`) — `install-linux.md`/`capture-relay.md`
+  now `cp` these directly instead of having the reader hand-type or
+  copy-paste the same content from a markdown code block, which also
+  means the docs and the actual files can't drift out of sync with
+  each other the way two separate copies of the same content could.
+  README's Project layout tree refreshed while in there — it had grown
+  quite stale (missing `capture_relay/`, several `docs/` additions,
+  `.env.example`, `scripts/`, `assets/`).
+
+### Changed
+- **`mcp-eveng` and `mcp-relay` now share ONE venv and ONE `.env` file
+  -- `/opt/mcp_relay` as a separate deployment no longer exists.** Per
+  direct feedback: now that `asyncssh`/`starlette`/`uvicorn` are base
+  dependencies (see the entry below), both processes are just two
+  different entrypoints (`mcp-eveng`, `mcp-eveng-capture-relay`) of the
+  exact same installed package -- there was no longer a real reason for
+  a second venv. Confirmed directly, not assumed: every settings class
+  involved already uses `extra="ignore"`, so pointing both processes at
+  the same `.env` file works with zero code changes -- verified by
+  actually loading `EvengSettings`/`MCPTransportSettings`/
+  `CaptureSSHSettings`/`CaptureURLSettings`/`RelayListenSettings` all
+  from one real combined file and confirming each correctly reads only
+  its own variables. This also fixes a genuine footgun: `CAPTURE_SSH_*`
+  and `CAPTURE_TOKEN_SECRET` previously had to be kept identical across
+  two separate files by hand; now there's only one declaration of each,
+  so they can't drift out of sync at all. `.env.capture-relay.example`
+  is gone -- merged into `.env.example` as a clearly-labeled section
+  below the main settings, per direct request not to mix the two.
+  `docs/capture-relay.md` restructured accordingly (steps 5/6 merged
+  into one settings step; the systemd unit now uses
+  `WorkingDirectory=/opt/mcp_eveng`, matching `mcp-eveng.service`
+  itself, with only `ExecStart` differing between the two units) and
+  `docs/upgrading.md` simplified to one `pip install` covering both
+  services. 618 tests still pass unchanged -- this was a deployment/
+  docs restructuring, not a code-logic change, confirmed by the test
+  suite and every source file needing zero changes beyond what's
+  already covered by the entry below.
+
+- **`asyncssh`/`starlette`/`uvicorn` folded into the base install --
+  the optional `capture-relay` extra is gone.** Per direct feedback:
+  the complexity of a separate extra wasn't worth it for the actual
+  size of what it gated. Confirmed exactly what that extra was really
+  adding: `starlette`/`uvicorn` were already pulled in transitively by
+  `mcp[cli]` itself (its own `--sse`/`--http` transports are built on
+  both), so the only genuinely new dependency was `asyncssh` (plus its
+  own single dependency, `cryptography`) -- a small, single-purpose
+  library, not worth a separate install step for. Verified end-to-end
+  in a fresh, clean venv: a plain `pip install -e .` (no extra) now
+  installs everything `list_captures`/`get_capture` and the standalone
+  relay both need. `docs/capture-relay.md` steps 5/6 and
+  `docs/upgrading.md` updated to drop `[capture-relay]` from every
+  install/upgrade command; step 6 renamed from "Install and config" to
+  "Config" since there's nothing left to separately install if
+  `mcp-eveng` was already set up via `install-linux.md`'s systemd
+  section. `_require_asyncssh()`'s error message (in the unlikely case
+  it's still missing on a broken/incomplete install) updated to match
+  -- it's a base dependency now, not something to `pip install` an
+  extra for.
+
+## [0.6.0] - 2026-08-31
+
+### Documentation
+- **`/etc/mcp-eveng` was referenced as a suggested path in 6 places
+  across `.env.example`/`.env.capture-relay.example` (TLS certs, TLS
+  keys, SSH `known_hosts`) but never actually documented anywhere** --
+  no instructions existed to create it or set correct ownership/
+  permissions. Added a new step 5 to `install-linux.md`'s systemd
+  section (`mkdir`/`chown mcp-eveng:mcp-eveng`/`chmod 750`, private
+  key files specifically `600`), with a note that `ProtectSystem=strict`
+  doesn't block *reading* from there -- only writing, which this
+  directory is never used for -- so no systemd unit change is needed.
+  `docs/capture-relay.md` and every `.env.example`/
+  `.env.capture-relay.example` comment suggesting this path now points
+  back to that step. `install-windows.md` needs nothing -- no systemd
+  section, and `/etc/mcp-eveng` is a Linux-specific convention anyway.
+
+### Fixed
+- **`eve-capture.bat`'s curl calls could silently resolve to Windows'
+  own bundled Schannel-based `curl.exe` instead of a working
+  alternative** -- confirmed live: Windows' `curl.exe` (Schannel, its
+  native TLS stack) fails against this relay over HTTPS with a cryptic
+  `schannel: next InitializeSecurityContext failed:
+  SEC_E_INTERNAL_ERROR`, while the official curl.se Windows build
+  (a different TLS backend) connects to the exact same server without
+  issue -- a genuine Windows/Schannel-level quirk, not specific to
+  this project (the identical error shows up against totally unrelated
+  HTTPS servers on affected machines, confirmed via a live test
+  against `https://www.google.com`). All three curl invocations
+  (availability check, preflight, real stream) now use a new
+  configurable `CURL` variable, matching the existing `WIRESHARK`/
+  `PLINK` pattern -- an explicit full path by default, not a bare
+  `curl.exe` relying on `PATH`, since `PATH` order can silently
+  resolve back to Windows' own Schannel-based curl even after
+  installing a working alternative, reintroducing the exact same
+  failure with no obvious cause.
+- **`python-dotenv` silently corrupts Windows paths inside
+  double-quoted `.env` values** -- confirmed live, hit by a real
+  Windows user: a path like `"C:\path\to\...\certs\newkey.pem"` parses
+  back with an actual TAB character where `\to\` was and an actual
+  NEWLINE where `\new...` was, since `\t`/`\n`/etc. are recognized
+  escape sequences inside double-quoted values, not literal
+  backslash-letter text. Windows paths can't contain control
+  characters, so this then fails deep inside OpenSSL's
+  `load_cert_chain()` with the exact same unhelpful `OSError: [Errno
+  22] Invalid argument` as the previous entry below -- two genuinely
+  different root causes producing an identical, unhelpful symptom, only
+  told apart by directly reproducing the corruption with a synthetic
+  `.env` file matching the real path's shape and confirming the actual
+  control characters land in the parsed value. Fixed with a validator
+  on every `*_PATH` settings field across both processes
+  (`MCP_TLS_CERT_PATH`/`_KEY_PATH`, `CAPTURE_RELAY_TLS_CERT_PATH`/
+  `_KEY_PATH`, `CAPTURE_SSH_KEY_PATH`, `CAPTURE_SSH_KNOWN_HOSTS`) that
+  detects a literal control character in the value and explains
+  exactly what happened and how to fix it (forward slashes, or single
+  quotes instead of double) -- confirmed live against the exact
+  corruption pattern that caused the original report. Also documented
+  prominently in `.env.example`, `.env.capture-relay.example`, and
+  `install-windows.md`, so Windows users can avoid this happening in
+  the first place rather than needing to hit and diagnose it. 12 new
+  tests; `ruff`/`mypy` clean.
+- **A bad TLS cert/key path (typo, missing file, wrong permissions) on
+  either `mcp-eveng` or `mcp-relay` surfaced as an utterly unhelpful
+  `OSError: [Errno 22] Invalid argument`, deep inside OpenSSL's own
+  `load_cert_chain()`, with no indication of which of the two files
+  was the problem or what was actually wrong with it** -- hit live: a
+  single missing path segment in `CAPTURE_RELAY_TLS_KEY_PATH`
+  (`certskey.pem` instead of `certs\key.pem`) produced this exact
+  cryptic error with nothing pointing at the actual typo. Root cause
+  confirmed by researching the exact error/traceback signature: this
+  is a known, generic failure mode of Python's `ssl` module on a bad
+  path or an encrypted key with no password supplied, not specific to
+  this project's own code, and not something a clearer message from
+  `uvicorn`/OpenSSL could be coaxed out of after the fact. Fixed by
+  adding a pre-flight check, in both `server.py`'s `_run_networked`
+  and `capture_relay/__main__.py`'s `main()`, that opens each
+  configured TLS file itself before ever reaching `uvicorn.Config`/
+  `uvicorn.run` -- on failure, prints a clear message naming the exact
+  variable (`MCP_TLS_CERT_PATH`/`_KEY_PATH` or
+  `CAPTURE_RELAY_TLS_CERT_PATH`/`_KEY_PATH`) and the exact path, then
+  exits cleanly (code 1, no traceback) rather than letting the
+  original cryptic `OSError` propagate. Confirmed live on both
+  processes: a bad path now exits immediately with a clear message; a
+  valid cert/key pair still works exactly as before. 11 new tests
+  (both the check function directly and that `main()`/`_run_networked`
+  genuinely call it before touching uvicorn, not just that the check
+  works in isolation) -- two pre-existing tests were using fake,
+  non-existent example paths for their TLS settings and needed
+  updating to real temp files once this check started actually
+  opening them. 610 passed; `ruff`/`mypy` clean.
+
+### Added
+- **`CAPTURE_RELAY_LOG_LEVEL` for the standalone relay** -- confirmed
+  it had no log-level configuration at all (no `logging.basicConfig()`
+  anywhere in `capture_relay/`, and `uvicorn.run()` never passed a
+  `log_level`, so it silently used uvicorn's own built-in default,
+  `"info"`, with no way to change it). Adding it to the relay's `.env`
+  before this had zero effect -- confirmed the settings model uses
+  `extra="ignore"`, so it wouldn't even error, just be silently
+  dropped. Matches the main `mcp-eveng` process's own
+  `MCP_LOG_LEVEL` pattern exactly (same validation, same default,
+  same `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` set) but under its
+  own `CAPTURE_RELAY_` prefix, consistent with this settings class's
+  other fields (`_LISTEN_HOST`, `_TLS_*`) -- drives both
+  `logging.basicConfig()` (this process's own log statements) and
+  `uvicorn.run(..., log_level=...)` (uvicorn's own access/error logs)
+  separately, since they're genuinely two different mechanisms.
+  Confirmed live against a real running relay: a `DEBUG`-level line
+  appears with `CAPTURE_RELAY_LOG_LEVEL=DEBUG` set and is correctly
+  absent at the default `INFO` level. 6 new tests; `ruff`/`mypy` clean.
+
+## [0.5.0] - 2026-08-31
+
+### Fixed
+- **"PRO/Corporate" replaced with "PRO" throughout** (66 mechanical
+  occurrences across 17 files, plus 3 "Professional/Corporate/Learning
+  Center tiers" mentions rewritten properly) -- EVE-NG has no separate
+  "Corporate" product; this project's own edition check is a single
+  binary `is_pro_edition()`, with no sub-tier distinction to begin
+  with, so the old wording implied a distinction that was never real.
+- **A real internal IP address (the tester's own EVE-NG PRO server)
+  was hardcoded across 28 places in 7 test files** -- confirmed via a
+  full audit of every hostname/IP/username/password literal across the
+  whole test suite (everything else checked out: IANA-reserved test
+  domains, EVE-NG's own documented defaults, generic placeholders).
+  Replaced with the same placeholder already used in the docs
+  (`192.168.1.50`) for consistency. Deliberately did NOT rewrite git
+  history to scrub it from past commits too -- weighed against the
+  actual severity (a private RFC1918 address, not attached to any
+  credential or public hostname) and the real disruption a full
+  history rewrite causes (every subsequent commit SHA changes, forces
+  a rewrite on every existing clone/fork), the forward-only fix was
+  judged proportionate.
+- **`.env.example`/`.env.capture-relay.example` spacing was
+  inconsistent** -- blank lines between two adjacent variables with no
+  comment describing either one (removed) vs. between a variable and
+  the comment block documenting the *next* one (kept) -- per direct
+  feedback on which pattern should apply where.
+
+### Documentation
+- **"Publishing to PyPI" section removed from the README** entirely.
+- **`docs/capture-relay.md` steps 5-7 reorganized** per direct
+  feedback: the two install-and-configure steps grouped by *app*
+  (`mcp-relay` then `mcp-eveng`) instead of by file type, each with
+  its own install command (a missing `git clone` added, with a note
+  on why it targets the shared `/opt/mcp_eveng` even under the
+  "install mcp-relay" step); step 6's "copy `.env.example`" instruction
+  corrected -- that file already exists from the base `mcp-eveng`
+  install, so this step now says to update specific existing fields,
+  not copy a fresh file, with the field list converted to bullets; a
+  "Start app manually" step added after the systemd commands; step 7
+  renamed to include "(MCP server)" for clarity.
+- **`scripts/eve-capture.bat`**: added self-signed-cert support
+  (`-k`/`--insecure` on every curl call -- a no-op on plain HTTP,
+  needed for HTTPS against a self-signed cert, the realistic case for
+  a relay on a private/lab network) and a new `RELAY_SCHEME` variable
+  so the script can actually reach a relay that has TLS configured
+  (added in the API-key/TLS work below) at all -- a real gap: relay-side
+  TLS support existed with no way for this script to use it until now.
+  `--connect-timeout`/`--max-time` (previously hardcoded 5/10) are now
+  the configurable `RELAY_CONNECT_TIMEOUT`/`RELAY_MAX_TIME` variables,
+  both defaulting to 5 per direct request. Also fixed three stale
+  step-number references left over from the `capture-relay.md`
+  renumbering (missed in this file specifically at the time) and
+  rewrote the file's top status comment, which still said "UNTESTED
+  end-to-end" and "still being confirmed" despite everything having
+  since been confirmed working live.
+
+### Added
+- **Optional API key for `mcp-eveng`'s `--sse`/`--http` transports**
+  (`MCP_API_KEY`). When set, every request must present it via
+  `Authorization: Bearer <key>` or gets a `401` before it ever reaches
+  the MCP handler -- checked with `secrets.compare_digest`, not `==`,
+  so a wrong guess can't be narrowed down via response timing.
+- **Optional TLS for both `mcp-eveng` and `mcp-relay`**
+  (`MCP_TLS_CERT_PATH`/`_KEY_PATH`/`_KEY_PASSWORD` on the main process,
+  `CAPTURE_RELAY_TLS_CERT_PATH`/`_KEY_PATH`/`_KEY_PASSWORD` on the
+  relay). Cert and key are validated as a pair -- one without the
+  other fails fast at startup, not a confusing runtime error.
+  `mcp-relay` already called `uvicorn.run()` directly, so this was a
+  direct kwarg passthrough. `mcp-eveng`'s `--sse`/`--http` needed more:
+  the SDK's own `FastMCP.run()` hardcodes a plain-HTTP `uvicorn.Config`
+  with no hook for TLS (or for the API key above), confirmed by reading
+  its actual source -- `run_sse_async`/`run_streamable_http_async` both
+  build `uvicorn.Config(..., host=..., port=..., log_level=...)` with
+  nothing else configurable. Fixed by building the same Starlette app
+  the SDK itself would (via its own public `sse_app()`/
+  `streamable_http_app()`), optionally wrapping it in the new API-key
+  middleware, and serving it with our own `uvicorn.Config` instead --
+  `stdio` is untouched, still goes through the SDK's own `mcp.run()`
+  entirely, since it never opens a socket and neither feature applies.
+  Both confirmed working against real running servers (not just code
+  review): correct 401/401/200 sequence across no-key/wrong-key/
+  right-key requests, successful TLS handshake on both processes, and
+  plain HTTP correctly refused once TLS is configured. 28 new tests
+  covering the config validators, the middleware directly (via
+  Starlette's `TestClient`), and that settings genuinely reach
+  `uvicorn.Config`/`uvicorn.run` rather than just being present
+  somewhere in a settings object. `ruff check`/`ruff format --check`/
+  `mypy` all clean -- one genuine mypy limitation surfaced along the
+  way: `**dict` unpacking against `uvicorn`'s heterogeneously-typed
+  keyword arguments doesn't type-check at all, regardless of the
+  dict's actual contents; switched to explicit named parameters
+  instead (uvicorn's own default for each is already `None`, confirmed
+  against its signature), which is cleaner code besides.
+
 ## [0.4.0] - 2026-08-30
 
 ### Fixed
@@ -111,7 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own CI matrix (3.10-3.13) is the definitive cross-version check.
 
 ### Added
-- **`get_link_quality`: new PRO/Corporate-only tool complementing
+- **`get_link_quality`: new PRO-only tool complementing
   `set_link_quality`.** Gets the current delay/jitter/packet-loss/
   bandwidth on both sides of an existing connection -- the given node's
   interface, and whatever's on the opposite end, resolved automatically
@@ -658,7 +938,7 @@ rather than repeating every individual commit message.
   from that entry and reused automatically; `far_delay` etc. are optional
   overrides, not required inputs -- supplying one changes just that
   value, leaving the rest untouched. Not confirmed whether this holds on
-  every PRO/Corporate version, only the one live server tested, but no
+  every PRO version, only the one live server tested, but no
   new call is needed to use it either way. Verified: two new tests
   (reading current far-side values when omitted, and a partial override
   leaving the untouched far-side fields at their current values, not 0)
@@ -739,7 +1019,7 @@ rather than repeating every individual commit message.
   though nothing stops them being set there).
 
 ### Added
-- **`list_captures`/`get_capture`: new PRO/Corporate-only tools, plus a
+- **`list_captures`/`get_capture`: new PRO-only tools, plus a
   standalone `mcp-eveng-capture-relay` systemd service and a Windows
   `.bat` companion, for streaming an EVE-NG PRO Wireshark capture to a
   local Wireshark without a personal SSH+sudo account on the EVE-NG
@@ -787,13 +1067,13 @@ rather than repeating every individual commit message.
   disabled by default in both `tools.env.*.example` files even on PRO,
   since it depends on infrastructure (the SSH accounts, the relay
   service) that doesn't exist until deliberately set up.
-- **`set_link_quality`: new PRO/Corporate-only tool for per-connection
+- **`set_link_quality`: new PRO-only tool for per-connection
   link quality (delay/jitter/packet loss/bandwidth), set independently on
   each side of a connection.** No Community equivalent exists at all
   (confirmed directly by a user: no GUI option there), and unlike this
   project's other PRO/Community differences, there's no open-source
   Community-side code to cross-check against either -- this feature is
-  PRO/Corporate-exclusive from the ground up. There's no documented
+  PRO-exclusive from the ground up. There's no documented
   public API for it: EVE-NG's own API docs don't cover it, and PRO's
   backend is closed-source. The request shape (`PUT /labs/{lab}/quality`)
   was captured live from a real PRO server's own GUI network traffic --
@@ -914,10 +1194,10 @@ rather than repeating every individual commit message.
   out, never actually tested what it appeared to either way, for the
   same reason above) -- replaced with tests reading raw file content
   directly plus one full functional end-to-end check.
-- **`tools.env.example` split into `tools.env.pro.example` (PRO/Corporate)
+- **`tools.env.example` split into `tools.env.pro.example` (PRO)
   and `tools.env.comm.example` (Community).** The two are identical
   except `export_node`/`share_lab` are disabled in the Community file --
-  both are PRO/Corporate-only features (see "PRO vs Community
+  both are PRO-only features (see "PRO vs Community
   differences"), so there's nothing they can actually do there. The old
   single `tools.env.example` (effectively already the PRO version, since
   it had both tools enabled) is removed, not kept as a third file.
@@ -957,7 +1237,7 @@ rather than repeating every individual commit message.
   generic `"Request not valid"`/`"Lab has not been modified"` EVE-NG
   itself gives no useful detail on. Confirmed against EVE-NG's own
   official features-compare page: both are listed there as separate
-  toggleable PRO/Corporate features ("Export/Import configs...", "Shared
+  toggleable PRO features ("Export/Import configs...", "Shared
   Lab"/"Shared Project"), directly explaining the unconditional live
   failures found while testing against a real Community server.
 - New `edition.py` module: extracted the previously-private

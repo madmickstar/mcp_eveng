@@ -20,11 +20,18 @@ flow — this doc only covers OS-specific setup.
 git clone https://github.com/madmickstar/mcp_eveng.git
 cd mcp_eveng
 python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+.venv/bin/pip install -e .
 ```
 
+Calls the venv's own `pip` directly, without a separate activation
+step. If you're doing development work on this project itself (running
+the test suite, linting), use `.[dev]` instead of `.` in that command.
+
 ## Running
+
+Either activate the venv first (`source .venv/bin/activate`) and use
+the bare commands below, or call `.venv/bin/mcp-eveng` directly every
+time without activating -- both work identically.
 
 ```bash
 mcp-eveng          # stdio (default)
@@ -87,6 +94,22 @@ Requires [Node.js](https://nodejs.org/) (for `npx`). Bridge through
 }
 ```
 
+If `MCP_API_KEY` is set on the server (see README's Configuration
+section), add the header and switch to `https://` if TLS is also
+configured:
+
+```json
+{
+  "mcpServers": {
+    "eveng_http": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "env": { "AUTH_HEADER": "Bearer <your MCP_API_KEY value>" }
+    }
+  }
+}
+```
+
 ## Running as a systemd service (Linux)
 
 1. Install the venv module if needed:
@@ -131,46 +154,37 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin mcp-eveng
 sudo chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng
 ```
 
-5. Create the systemd unit:
+5. Optional: create `/etc/mcp-eveng`, for TLS certs or an SSH
+`known_hosts` file (only needed if you're using `MCP_TLS_*`,
+`CAPTURE_RELAY_TLS_*`, or `CAPTURE_SSH_KNOWN_HOSTS` — see the comments
+in `.env.example`):
 
 ```bash
-sudo vi /etc/systemd/system/mcp-eveng.service
+sudo mkdir -p /etc/mcp-eveng
+sudo chown mcp-eveng:mcp-eveng /etc/mcp-eveng
+sudo chmod 750 /etc/mcp-eveng
 ```
 
-```ini
-# /etc/systemd/system/mcp-eveng.service
+Whatever files you put there should stay owned by `mcp-eveng`;
+private key files specifically should be `600` (owner read/write
+only), e.g. `sudo chmod 600 /etc/mcp-eveng/key.pem`. No systemd unit
+change needed to read from here — `ProtectSystem=strict` (set in
+`systemd/mcp-eveng.service`, see the next step) makes the filesystem
+read-only outside `ReadWritePaths`, not inaccessible, and this
+directory is only ever read from, never written to.
 
-[Unit]
-Description=MCP server for EVE-NG network emulator automation
-After=network-online.target
-Wants=network-online.target
+6. Install the systemd unit — a ready-to-use copy ships in the repo
+   itself, already cloned to `/opt/mcp_eveng` from step 2:
 
-[Service]
-Type=simple
-
-User=mcp-eveng
-Group=mcp-eveng
-
-WorkingDirectory=/opt/mcp_eveng
-ExecStart=/opt/mcp_eveng/.venv/bin/mcp-eveng --http
-
-Restart=on-failure
-RestartSec=5
-
-StandardOutput=journal
-StandardError=journal
-
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/opt/mcp_eveng
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp /opt/mcp_eveng/systemd/mcp-eveng.service /etc/systemd/system/mcp-eveng.service
 ```
 
-6. Start, verify, and enable at boot:
+Review it first if your paths/account differ from this guide's
+(`/opt/mcp_eveng`, the `mcp-eveng` account) — it's a plain text file,
+`systemd/mcp-eveng.service` in the repo.
+
+7. Start, verify, and enable at boot:
 
 ```bash
 sudo systemctl daemon-reload

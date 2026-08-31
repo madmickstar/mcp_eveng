@@ -460,7 +460,7 @@ class EvengClient:
     async def set_link_quality(self, lab_path: str, payload: dict[str, Any]) -> JsonDict:
         """PUT the full link-quality state (both endpoints) for one connection.
 
-        PRO/Corporate-only EVE-NG endpoint -- not in EVE-NG's own public API
+        PRO-only EVE-NG endpoint -- not in EVE-NG's own public API
         docs at all. See `tools/quality.py` for the confirmed request shape
         (captured live from a real PRO server's own GUI network traffic) and
         restrictions; this is just the raw PUT.
