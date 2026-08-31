@@ -24,6 +24,20 @@ REM
 REM CONFIGURE THESE FOR YOUR ENVIRONMENT:
 set WIRESHARK=C:\Program Files\Wireshark\Wireshark.exe
 set PLINK=C:\Program Files\PuTTY\plink.exe
+REM Windows' own bundled curl.exe uses Schannel (Windows' native TLS
+REM stack), which has been confirmed live to fail against this relay
+REM over HTTPS with a cryptic "schannel: next InitializeSecurityContext
+REM failed: SEC_E_INTERNAL_ERROR" -- a Windows/Schannel-level issue, not
+REM specific to this project (the exact same error shows up against
+REM totally unrelated HTTPS servers on affected machines). The official
+REM curl.se Windows build (a different TLS backend) does not have this
+REM problem -- download it from https://curl.se/windows/, extract it
+REM somewhere, and point this at its curl.exe explicitly. An explicit
+REM full path here, not a bare "curl.exe" relying on PATH, is
+REM deliberate: PATH order can silently resolve back to Windows' own
+REM Schannel-based curl.exe even after installing a different one,
+REM reintroducing the exact same failure with no obvious cause.
+set CURL=C:\curl\bin\curl.exe
 REM "http" (default) or "https" -- must match whatever CAPTURE_RELAY_TLS_*
 REM is set to in the relay's own .env (see docs/capture-relay.md step 5).
 REM Every curl call below always passes -k/--insecure regardless of this
@@ -121,8 +135,7 @@ REM here (a well-known cmd.exe fragility trap -- jumping into or out of
 REM a block that's already been tokenized as one unit can behave
 REM unpredictably) -- flag variables and straight-line if-blocks instead.
 set "HAVECURL=0"
-where curl.exe >nul 2>nul
-if %ERRORLEVEL%==0 set "HAVECURL=1"
+if exist "%CURL%" set "HAVECURL=1"
 
 set "CURLOK=0"
 if "%HAVECURL%"=="1" (
@@ -166,7 +179,7 @@ if "%HAVECURL%"=="1" (
     REM them again if your own environment's round-trip is consistently
     REM slower than that.
     set "HDRFILE=%TEMP%\eve_capture_preflight_%RANDOM%.tmp"
-    curl.exe -s -S -k --connect-timeout %RELAY_CONNECT_TIMEOUT% --max-time %RELAY_MAX_TIME% -D "!HDRFILE!" -o nul "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
+    "%CURL%" -s -S -k --connect-timeout %RELAY_CONNECT_TIMEOUT% --max-time %RELAY_MAX_TIME% -D "!HDRFILE!" -o nul "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%"
     if exist "!HDRFILE!" (
         findstr /C:" 200 " "!HDRFILE!" >nul 2>nul
         if !ERRORLEVEL!==0 set "CURLOK=1"
@@ -176,7 +189,7 @@ if "%HAVECURL%"=="1" (
 )
 
 if "%CURLOK%"=="1" (
-    curl.exe -s -N -k "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%" | "%WIRESHARK%" -k -i -
+    "%CURL%" -s -N -k "%RELAY_SCHEME%://%RELAYHOST%:%RELAYPORT%/capture/stream?token=%TOKEN%" | "%WIRESHARK%" -k -i -
     exit /b 0
 )
 
