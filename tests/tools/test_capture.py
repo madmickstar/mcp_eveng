@@ -67,15 +67,19 @@ async def test_get_capture_refuses_on_community() -> None:
     assert "Community" in result["message"]
 
 
-# -- missing optional dependency (asyncssh) ------------------------------------
+# -- missing dependency (asyncssh) --------------------------------------------
 #
 # Regression test: importing tools/capture.py (and therefore server.py,
 # which unconditionally imports every tools module) must NEVER require
 # asyncssh to be installed -- confirmed the hard way on a real test
-# install, where a plain `pip install -e .` (no capture-relay extra)
-# broke the entire mcp-eveng server at startup, not just this feature.
-# ssh_client.py now imports asyncssh lazily; these tests confirm the
-# resulting behavior at the tool level.
+# install, back when asyncssh was still an optional "capture-relay"
+# extra and a plain `pip install -e .` (no extra) broke the entire
+# mcp-eveng server at startup, not just this feature. asyncssh is now a
+# base dependency (see pyproject.toml), so this specific breakage is no
+# longer reachable through a normal install -- but ssh_client.py still
+# imports it lazily, and these tests still confirm the resulting
+# behavior at the tool level, since a broken/incomplete install remains
+# a real (if rarer) possibility worth a clear error for.
 
 
 async def test_list_captures_gives_clear_error_when_asyncssh_missing(monkeypatch) -> None:
@@ -85,7 +89,7 @@ async def test_list_captures_gives_clear_error_when_asyncssh_missing(monkeypatch
     result = await capture.list_captures(client, ssh_settings())
 
     assert result["status"] == "error"
-    assert "capture-relay" in result["message"]
+    assert "asyncssh" in result["message"]
 
 
 async def test_get_capture_gives_clear_error_when_asyncssh_missing(monkeypatch) -> None:
@@ -95,7 +99,7 @@ async def test_get_capture_gives_clear_error_when_asyncssh_missing(monkeypatch) 
     result = await capture.get_capture(client, ssh_settings(), url_settings(), position=1)
 
     assert result["status"] == "error"
-    assert "capture-relay" in result["message"]
+    assert "asyncssh" in result["message"]
 
 
 async def test_missing_asyncssh_check_happens_before_community_edition_is_irrelevant() -> None:
