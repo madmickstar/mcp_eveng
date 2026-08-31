@@ -110,6 +110,8 @@ if "%TOKEN%"=="" (
     exit /b 1
 )
 
+title EVE Capture - %CONTAINER%
+
 set "RELAYHOST=%URLHOST%"
 
 REM --- Primary path: curl against the relay (no SSH creds needed) ---
@@ -242,6 +244,8 @@ REM a wildcard, and the pnet0 case appends " not port 22" after "-w -".)
 REM ---------------------------------------------------------------------
 set "FILTER="
 if "%URLPATH%"=="pnet0" set "FILTER= not port 22"
+
+title EVE Capture - %URLPATH%
 
 "%PLINK%" -ssh -batch -i "%COMMUNITY_SSH_KEY%" %COMMUNITY_SSH_USER%@%URLHOST% -no-antispoof "sudo tcpdump -U -i %URLPATH% -s 0 -w -%FILTER%" | "%WIRESHARK%" -k -i -
 REM Password-based alternative -- uncomment this line and comment out
