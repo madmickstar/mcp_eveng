@@ -8,20 +8,33 @@ Supports all three transports the `mcp` SDK ships:
 Which transport to serve is a **CLI flag** (`--sse` / `--http`, no flag =
 stdio) handled in `__main__.py` -- it is not read from the environment.
 The network-only settings (bind host/port/paths, DNS-rebinding allowlist,
-statefulness, log level) still come from `MCPTransportSettings`, read from
-environment variables / a `.env` file -- see `config.py`.
+statefulness, log level, optional API key, optional TLS) still come from
+`MCPTransportSettings`, read from environment variables / a `.env` file --
+see `config.py`.
+
+`--sse`/`--http` are served with our own `uvicorn.Config`, not
+`FastMCP.run()`'s -- the SDK's own `run_sse_async`/`run_streamable_http_async`
+hardcode a plain-HTTP `uvicorn.Config` with no hook for either an API-key
+check or TLS, so this module builds the same Starlette app the SDK would
+(via the SDK's own public `sse_app()`/`streamable_http_app()`), optionally
+wraps it with `_APIKeyMiddleware`, and serves it with `uvicorn.Config`
+ourselves, adding `ssl_certfile`/`ssl_keyfile` when configured.
 """
 
 from __future__ import annotations
 
 import logging
+import secrets
 import sys
 import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import MCPTransportSettings, Transport, get_mcp_settings
 from .dependencies import close_client, get_client
@@ -116,6 +129,70 @@ def create_server(settings: MCPTransportSettings | None = None, transport: Trans
     return mcp
 
 
+class _APIKeyMiddleware:
+    """Raw ASGI middleware -- rejects any HTTP request that doesn't present
+    `Authorization: Bearer <api_key>` with a 401, before it ever reaches the
+    real MCP handler. Only installed when `MCP_API_KEY` is set -- see
+    `_run_networked`.
+
+    Uses `secrets.compare_digest` for the comparison, not `==` -- a plain
+    string comparison short-circuits on the first mismatched byte, which
+    leaks (via response timing) how many leading characters of a guessed
+    key were correct. That would partially defeat the point of an API key
+    check, so this is not a stylistic choice.
+    """
+
+    def __init__(self, app: ASGIApp, api_key: str) -> None:
+        self._app = app
+        self._expected = f"Bearer {api_key}".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        presented = headers.get(b"authorization", b"")
+        # compare_digest requires equal-length inputs to stay constant-time;
+        # a length mismatch is itself a safe, non-sensitive thing to leak
+        # (it doesn't narrow down the key's actual content at all).
+        if len(presented) != len(self._expected) or not secrets.compare_digest(presented, self._expected):
+            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            await response(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
+def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Transport) -> None:
+    """Serve `--sse`/`--http` ourselves, not via `FastMCP.run()` -- see this
+    module's docstring for why."""
+    import uvicorn
+
+    app: ASGIApp = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
+
+    if settings.api_key is not None:
+        app = _APIKeyMiddleware(app, settings.api_key.get_secret_value())
+        logger.info("API key required for every request (MCP_API_KEY is set).")
+    else:
+        logger.info("No API key configured (MCP_API_KEY unset) -- relying on the Host-header allowlist alone.")
+
+    if settings.tls_cert_path and settings.tls_key_path:
+        logger.info("Serving over HTTPS (MCP_TLS_CERT_PATH/MCP_TLS_KEY_PATH are set).")
+    else:
+        logger.info("Serving over plain HTTP (MCP_TLS_CERT_PATH/MCP_TLS_KEY_PATH unset).")
+
+    config = uvicorn.Config(
+        app,
+        host=settings.host,
+        port=settings.port,
+        log_level=settings.log_level.lower(),
+        ssl_certfile=settings.tls_cert_path,
+        ssl_keyfile=settings.tls_key_path,
+        ssl_keyfile_password=(settings.tls_key_password.get_secret_value() if settings.tls_key_password else None),
+    )
+    server = uvicorn.Server(config)
+    anyio.run(server.serve)
+
+
 def run(transport: Transport = "stdio") -> None:
     """Entrypoint used by both `python -m mcp_eveng` and the `mcp-eveng` console script."""
     settings = get_mcp_settings()
@@ -129,7 +206,10 @@ def run(transport: Transport = "stdio") -> None:
     mcp = create_server(settings, transport)
     logger.info("Starting mcp-eveng with transport=%s", transport)
     try:
-        mcp.run(transport=transport)
+        if transport == "stdio":
+            mcp.run(transport="stdio")
+        else:
+            _run_networked(mcp, settings, transport)
     except KeyboardInterrupt:
         # Ctrl+C is a normal way to stop the server, especially in --sse/--http
         # mode running in a foreground terminal. Exit quietly with a friendly

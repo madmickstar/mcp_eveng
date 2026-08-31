@@ -48,6 +48,11 @@ def main() -> None:
             host=listen_settings.listen_host,
             port=listen_settings.listen_port,
             timeout_graceful_shutdown=_SHUTDOWN_TIMEOUT_SECONDS,
+            ssl_certfile=listen_settings.tls_cert_path,
+            ssl_keyfile=listen_settings.tls_key_path,
+            ssl_keyfile_password=(
+                listen_settings.tls_key_password.get_secret_value() if listen_settings.tls_key_password else None
+            ),
         )
     except KeyboardInterrupt:
         print("\nGoodbye!", file=sys.stderr)

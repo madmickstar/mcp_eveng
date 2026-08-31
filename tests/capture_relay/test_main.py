@@ -26,7 +26,7 @@ def test_main_passes_timeout_graceful_shutdown_to_uvicorn(monkeypatch) -> None:
     """
     get_capture_ssh_settings.cache_clear()
     get_relay_listen_settings.cache_clear()
-    monkeypatch.setenv("CAPTURE_SSH_HOST", "172.16.130.14")
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
     monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
     monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
     monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
@@ -40,6 +40,74 @@ def test_main_passes_timeout_graceful_shutdown_to_uvicorn(monkeypatch) -> None:
         assert "timeout_graceful_shutdown" in kwargs
         assert isinstance(kwargs["timeout_graceful_shutdown"], (int, float))
         assert kwargs["timeout_graceful_shutdown"] > 0
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_passes_no_ssl_kwargs_when_tls_unconfigured(monkeypatch) -> None:
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+
+    try:
+        with patch("uvicorn.run") as mock_run:
+            relay_main.main()
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["ssl_certfile"] is None
+        assert kwargs["ssl_keyfile"] is None
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_passes_ssl_kwargs_when_tls_configured(monkeypatch) -> None:
+    """Confirms CAPTURE_RELAY_TLS_CERT_PATH/_KEY_PATH genuinely reach
+    uvicorn.run as ssl_certfile/ssl_keyfile, not just present somewhere
+    in the settings object."""
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+    monkeypatch.setenv("CAPTURE_RELAY_TLS_CERT_PATH", "/etc/relay-cert.pem")
+    monkeypatch.setenv("CAPTURE_RELAY_TLS_KEY_PATH", "/etc/relay-key.pem")
+
+    try:
+        with patch("uvicorn.run") as mock_run:
+            relay_main.main()
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["ssl_certfile"] == "/etc/relay-cert.pem"
+        assert kwargs["ssl_keyfile"] == "/etc/relay-key.pem"
+        assert kwargs["ssl_keyfile_password"] is None
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_passes_tls_key_password_when_set(monkeypatch) -> None:
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+    monkeypatch.setenv("CAPTURE_RELAY_TLS_CERT_PATH", "/etc/relay-cert.pem")
+    monkeypatch.setenv("CAPTURE_RELAY_TLS_KEY_PATH", "/etc/relay-key.pem")
+    monkeypatch.setenv("CAPTURE_RELAY_TLS_KEY_PASSWORD", "hunter2")
+
+    try:
+        with patch("uvicorn.run") as mock_run:
+            relay_main.main()
+
+        _, kwargs = mock_run.call_args
+        assert kwargs["ssl_keyfile_password"] == "hunter2"
     finally:
         get_capture_ssh_settings.cache_clear()
         get_relay_listen_settings.cache_clear()

@@ -14,7 +14,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Transport = Literal["stdio", "sse", "streamable-http"]
@@ -119,6 +119,37 @@ class MCPTransportSettings(BaseSettings):
             "server no longer recognizes."
         ),
     )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "If set, every --sse/--http request must present it via "
+            "'Authorization: Bearer <key>', or gets a 401. Unset (default): no "
+            "API-key check at all -- only the Host-header allowlist above."
+        ),
+    )
+    tls_cert_path: str | None = Field(
+        default=None,
+        description=(
+            "Path to a TLS certificate file. Serves --sse/--http over HTTPS "
+            "instead of plain HTTP when set together with tls_key_path."
+        ),
+    )
+    tls_key_path: str | None = Field(
+        default=None,
+        description="Path to the TLS certificate's private key file. Required together with tls_cert_path.",
+    )
+    tls_key_password: SecretStr | None = Field(
+        default=None,
+        description="Password for tls_key_path, if the private key itself is encrypted.",
+    )
+
+    @model_validator(mode="after")
+    def _tls_cert_and_key_together(self) -> MCPTransportSettings:
+        if bool(self.tls_cert_path) != bool(self.tls_key_path):
+            raise ValueError(
+                "MCP_TLS_CERT_PATH and MCP_TLS_KEY_PATH must both be set, or neither -- got only one of the two."
+            )
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod

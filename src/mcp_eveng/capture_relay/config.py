@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -79,6 +79,30 @@ class RelayListenSettings(BaseSettings):
 
     listen_host: str = Field(default="0.0.0.0")
     listen_port: int = Field(default=8001)
+    tls_cert_path: str | None = Field(
+        default=None,
+        description=(
+            "Path to a TLS certificate file. Serves the relay over HTTPS "
+            "instead of plain HTTP when set together with tls_key_path."
+        ),
+    )
+    tls_key_path: str | None = Field(
+        default=None,
+        description="Path to the TLS certificate's private key file. Required together with tls_cert_path.",
+    )
+    tls_key_password: SecretStr | None = Field(
+        default=None,
+        description="Password for tls_key_path, if the private key itself is encrypted.",
+    )
+
+    @model_validator(mode="after")
+    def _tls_cert_and_key_together(self) -> RelayListenSettings:
+        if bool(self.tls_cert_path) != bool(self.tls_key_path):
+            raise ValueError(
+                "CAPTURE_RELAY_TLS_CERT_PATH and CAPTURE_RELAY_TLS_KEY_PATH must "
+                "both be set, or neither -- got only one of the two."
+            )
+        return self
 
 
 class CaptureURLSettings(BaseSettings):
