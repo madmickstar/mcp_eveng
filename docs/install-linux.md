@@ -154,7 +154,25 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin mcp-eveng
 sudo chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng
 ```
 
-5. Create the systemd unit:
+5. Optional: create `/etc/mcp-eveng`, for TLS certs or an SSH
+`known_hosts` file (only needed if you're using `MCP_TLS_*`,
+`CAPTURE_RELAY_TLS_*`, or `CAPTURE_SSH_KNOWN_HOSTS` — see the comments
+in `.env.example`):
+
+```bash
+sudo mkdir -p /etc/mcp-eveng
+sudo chown mcp-eveng:mcp-eveng /etc/mcp-eveng
+sudo chmod 750 /etc/mcp-eveng
+```
+
+Whatever files you put there should stay owned by `mcp-eveng`;
+private key files specifically should be `600` (owner read/write
+only), e.g. `sudo chmod 600 /etc/mcp-eveng/key.pem`. No systemd unit
+change needed to read from here — `ProtectSystem=strict` below makes
+the filesystem read-only outside `ReadWritePaths`, not inaccessible,
+and this directory is only ever read from, never written to.
+
+6. Create the systemd unit:
 
 ```bash
 sudo vi /etc/systemd/system/mcp-eveng.service
@@ -193,7 +211,7 @@ ReadWritePaths=/opt/mcp_eveng
 WantedBy=multi-user.target
 ```
 
-6. Start, verify, and enable at boot:
+7. Start, verify, and enable at boot:
 
 ```bash
 sudo systemctl daemon-reload
