@@ -40,9 +40,9 @@ def test_connect_kwargs_disables_host_key_checking_when_known_hosts_unset() -> N
 
 
 def test_connect_kwargs_uses_known_hosts_file_when_configured() -> None:
-    kwargs = _connect_kwargs(_settings(ssh_known_hosts="/etc/mcp-eveng/known_hosts"))
+    kwargs = _connect_kwargs(_settings(ssh_known_hosts="/home/mcp-eveng/.ssh/known_hosts"))
 
-    assert kwargs["known_hosts"] == "/etc/mcp-eveng/known_hosts"
+    assert kwargs["known_hosts"] == "/home/mcp-eveng/.ssh/known_hosts"
 
 
 def test_connect_kwargs_respects_custom_port() -> None:

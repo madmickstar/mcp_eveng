@@ -43,6 +43,7 @@ folders and users — all through the EVENG REST API.
 
 - All three MCP transports: `stdio`, `--sse`, `--http`
 - Full coverage of the EVE-NG REST API
+- HTTP/HTTPS and API key support
 - 47 tools to manage your EVE-NG labs
 - Bulk edits across many nodes at once
 - Stream Wireshark captures to a local Wireshark
@@ -216,6 +217,17 @@ not the CA. This is a universal PEM chain-file convention (the same
 order Apache/nginx/every OpenSSL-based server expects), not specific
 to this project.
 
+**If a Windows client connecting to this server (`curl.exe`, or
+anything else using Windows' native Schannel TLS stack) fails with
+`schannel: next InitializeSecurityContext failed: SEC_E_INTERNAL_ERROR`,
+check your certificate's key algorithm** — confirmed by directly
+comparing a cert that triggered this against one that didn't: the
+failing one used ECDSA with the P-521 curve (`secp521r1`). Windows
+Schannel has a documented incompatibility with P-521 certificates
+specifically (P-256/P-384 ECDSA and RSA are unaffected — this isn't
+"avoid ECDSA," just that one specific curve). Regenerate the
+certificate with RSA (2048-bit or larger) or ECDSA P-256/P-384 instead.
+
 For running the server and configuring it in Claude Desktop / Claude Code
 (both stdio and streamable-http), see the
 **[Linux/macOS](docs/install-linux.md)** or
@@ -250,55 +262,59 @@ Tool names have no prefix (`get_status`, not `eveng_get_status`) — be aware
 this means a name could collide with another MCP server's tool if you ever
 connect more than one server with overlapping names to the same client.
 
-| Area | Tool | Description |
-| --- | --- | --- |
-| System | `get_status` | Reports EVE-NG server status and version. |
-| | `list_node_templates` | Lists available node templates. |
-| | `get_node_template` | Gets details for a single node template, including its images. |
-| | `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). |
-| | `list_user_roles` | Lists available user roles. Disabled by default. |
-| Server introspection | `list_tools` | Lists the tools published by the MCP server. |
-| Folders | `list_folder` | Lists the contents of a folder. |
-| | `add_folder` | Creates a new folder. |
-| | `move_folder` | Moves or renames a folder. |
-| | `delete_folder` | Deletes a folder. Requires user confirmation before it does anything. |
-| Users | `list_users` | Lists user accounts. Disabled by default. |
-| | `get_user` | Gets details for a single user. Disabled by default. |
-| | `add_user` | Creates a new user account. Disabled by default. |
-| | `edit_user` | Edits an existing user account. Disabled by default. |
-| | `delete_user` | Deletes a user account. Requires user confirmation before it does anything. Disabled by default. |
-| Labs | `get_lab` | Gets metadata for a lab. |
-| | `open_lab` | Looks up a lab and reports its lock status. |
-| | `create_lab` | Creates a new lab. |
-| | `edit_lab` | Edits a lab's metadata. |
-| | `share_lab` | Shares a lab with one or more users. |
-| | `move_lab` | Moves a lab to a different folder. |
-| | `delete_lab` | Deletes a lab. Requires user confirmation before it does anything. Disabled by default. |
-| | `get_lab_topology` | Gets a lab's node/network topology. |
-| | `get_lab_links` | Gets a lab's link (interface) mappings. |
-| | `list_lab_pictures` | Lists background pictures placed in a lab. |
-| | `list_labs` | Recursively lists every lab under a folder. |
-| Networks | `list_lab_networks` | Lists networks in a lab. |
-| | `add_lab_network` | Adds a network to a lab. |
-| | `edit_lab_network` | Edits an existing network. |
-| | `delete_lab_network` | Deletes a network. Requires user confirmation before it does anything. |
-| Nodes | `list_lab_nodes` | Lists nodes in a lab. |
-| | `add_lab_node` | Adds a node to a lab. |
-| | `edit_lab_node` | Edits an existing node. |
-| | `change_node_delay` | Changes a node's startup delay, one node or in bulk. |
-| | `edit_lab_nodes_by_template` | Bulk-edits interfaces/cpu/memory/icon/image across nodes sharing a template. |
-| | `delete_lab_node` | Deletes a node. Requires user confirmation before it does anything. |
-| | `get_node_interfaces` | Gets a node's interfaces and what they're wired to. |
-| | `connect_interface` | Wires a node's interface to another node or to a network. |
-| | `start_node` | Starts a node, or every node in a lab. |
-| | `stop_node` | Stops a node, or every node in a lab. |
-| | `wipe_node` | Wipes a node's saved configuration. |
-| | `export_node` | Exports a node's running configuration. |
-| | `set_link_quality` | Sets per-connection delay/jitter/packet-loss/bandwidth. PRO only. |
-| | `get_link_quality` | Gets current delay/jitter/packet-loss/bandwidth on both sides of a connection. PRO only. |
-| Live console access | `telnet_node` | Sends CLI commands to a running node's console over telnet. |
-| Capture relay | `list_captures` | Lists running Wireshark capture containers. PRO only, disabled by default. |
-| | `get_capture` | Mints a one-time URL to stream a capture to a local Wireshark. PRO only, disabled by default. |
+**Comm Eve**/**Pro Eve**: which EVE-NG edition(s) support the tool — see
+"EVE-NG Pro vs Community MCP tools" above for how edition is detected
+and why these six specifically differ.
+
+| Area | Tool | Description | Comm Eve | Pro Eve |
+| --- | --- | --- | --- | --- |
+| System | `get_status` | Reports EVE-NG server status and version. | ✅ | ✅ |
+| | `list_node_templates` | Lists available node templates. | ✅ | ✅ |
+| | `get_node_template` | Gets details for a single node template, including its images. | ✅ | ✅ |
+| | `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). | ✅ | ✅ |
+| | `list_user_roles` | Lists available user roles. Disabled by default. | ✅ | ✅ |
+| Server introspection | `list_tools` | Lists the tools published by the MCP server. | ✅ | ✅ |
+| Folders | `list_folder` | Lists the contents of a folder. | ✅ | ✅ |
+| | `add_folder` | Creates a new folder. | ✅ | ✅ |
+| | `move_folder` | Moves or renames a folder. | ✅ | ✅ |
+| | `delete_folder` | Deletes a folder. Requires user confirmation before it does anything. | ✅ | ✅ |
+| Users | `list_users` | Lists user accounts. Disabled by default. | ✅ | ✅ |
+| | `get_user` | Gets details for a single user. Disabled by default. | ✅ | ✅ |
+| | `add_user` | Creates a new user account. Disabled by default. | ✅ | ✅ |
+| | `edit_user` | Edits an existing user account. Disabled by default. | ✅ | ✅ |
+| | `delete_user` | Deletes a user account. Requires user confirmation before it does anything. Disabled by default. | ✅ | ✅ |
+| Labs | `get_lab` | Gets metadata for a lab. | ✅ | ✅ |
+| | `open_lab` | Looks up a lab and reports its lock status. | ✅ | ✅ |
+| | `create_lab` | Creates a new lab. | ✅ | ✅ |
+| | `edit_lab` | Edits a lab's metadata. | ✅ | ✅ |
+| | `share_lab` | Shares a lab with one or more users. | | ✅ |
+| | `move_lab` | Moves a lab to a different folder. | ✅ | ✅ |
+| | `delete_lab` | Deletes a lab. Requires user confirmation before it does anything. Disabled by default. | ✅ | ✅ |
+| | `get_lab_topology` | Gets a lab's node/network topology. | ✅ | ✅ |
+| | `get_lab_links` | Gets a lab's link (interface) mappings. | ✅ | ✅ |
+| | `list_lab_pictures` | Lists background pictures placed in a lab. | ✅ | ✅ |
+| | `list_labs` | Recursively lists every lab under a folder. | ✅ | ✅ |
+| Networks | `list_lab_networks` | Lists networks in a lab. | ✅ | ✅ |
+| | `add_lab_network` | Adds a network to a lab. | ✅ | ✅ |
+| | `edit_lab_network` | Edits an existing network. | ✅ | ✅ |
+| | `delete_lab_network` | Deletes a network. Requires user confirmation before it does anything. | ✅ | ✅ |
+| Nodes | `list_lab_nodes` | Lists nodes in a lab. | ✅ | ✅ |
+| | `add_lab_node` | Adds a node to a lab. | ✅ | ✅ |
+| | `edit_lab_node` | Edits an existing node. | ✅ | ✅ |
+| | `change_node_delay` | Changes a node's startup delay, one node or in bulk. | ✅ | ✅ |
+| | `edit_lab_nodes_by_template` | Bulk-edits interfaces/cpu/memory/icon/image across nodes sharing a template. | ✅ | ✅ |
+| | `delete_lab_node` | Deletes a node. Requires user confirmation before it does anything. | ✅ | ✅ |
+| | `get_node_interfaces` | Gets a node's interfaces and what they're wired to. | ✅ | ✅ |
+| | `connect_interface` | Wires a node's interface to another node or to a network. | ✅ | ✅ |
+| | `start_node` | Starts a node, or every node in a lab. | ✅ | ✅ |
+| | `stop_node` | Stops a node, or every node in a lab. | ✅ | ✅ |
+| | `wipe_node` | Wipes a node's saved configuration. | ✅ | ✅ |
+| | `export_node` | Exports a node's running configuration. | | ✅ |
+| | `set_link_quality` | Sets per-connection delay/jitter/packet-loss/bandwidth. | | ✅ |
+| | `get_link_quality` | Gets current delay/jitter/packet-loss/bandwidth on both sides of a connection. | | ✅ |
+| Live console access | `telnet_node` | Sends CLI commands to a running node's console over telnet. | ✅ | ✅ |
+| Capture relay | `list_captures` | Lists running Wireshark capture containers. Disabled by default. | | ✅ |
+| | `get_capture` | Mints a one-time URL to stream a capture to a local Wireshark. Disabled by default. | | ✅ |
 
 "Disabled by default" tools: see "Controlling which MCP tools are exposed"
 below for how to turn them on. "Requires user confirmation" tools: see

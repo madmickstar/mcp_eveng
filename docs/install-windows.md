@@ -8,8 +8,9 @@ flow — this doc only covers OS-specific setup.
 
 - [Install](#install)
 - [Running](#running)
-- [Using it with Claude Desktop / Claude Code (stdio)](#using-it-with-claude-desktop--claude-code-stdio)
-- [Using it with Claude Desktop / Claude Code (streamable-http)](#using-it-with-claude-desktop--claude-code-streamable-http)
+- [Windows paths: use forward slashes](#windows-paths-use-forward-slashes)
+- [Client integration: stdio](#client-integration-stdio)
+- [Client integration: streamable-http](#client-integration-streamable-http)
 
 ## Install
 
@@ -41,25 +42,17 @@ activation script: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
 mcp-eveng          # stdio (default)
 mcp-eveng --http   # Streamable HTTP
 mcp-eveng --sse    # legacy SSE
-
-# Bound to all interfaces, requires MCP_ALLOWED_HOSTS
-$env:MCP_HOST="0.0.0.0"; $env:MCP_ALLOWED_HOSTS="192.168.1.100:8000,192.168.1.150:*"; mcp-eveng --http
 ```
 
-`cmd.exe` equivalent for env vars:
-`set MCP_HOST=0.0.0.0 && set MCP_ALLOWED_HOSTS=... && mcp-eveng --http`.
-`python -m mcp_eveng [flags]` is equivalent to `mcp-eveng [flags]`.
-Ctrl+C stops a foreground server cleanly.
+- **stdio**: requires no `.env`
+- **--sse**: requires `.env`
+- **--http**: requires `.env`
 
-- **stdio** (no flag): no `.env` needed — the MCP host supplies config
-  in its own `env` block.
-- **`--sse` / `--http`**: copy `.env.example` to `.env` and set
-  `EVENG_*`/`MCP_*` — see the main README's Configuration section.
-  Binding to `0.0.0.0` may trigger a Windows Firewall prompt; allow it
-  on your local/private network profile.
+## Windows paths: use forward slashes
 
 **For any `*_PATH` variable in `.env`** (`MCP_TLS_CERT_PATH`,
-`CAPTURE_SSH_KEY_PATH`, etc.), **use forward slashes**
+`CAPTURE_SSH_KEY_PATH`, etc. — TLS certs are the most common case,
+but this applies to every one), **use forward slashes**
 (`"C:/path/to/file"`) instead of backslashes. A backslash immediately
 followed by certain letters (`\t`, `\n`, `\r`, and a few others) inside
 a double-quoted `.env` value gets silently turned into an actual
@@ -68,11 +61,11 @@ path containing `\to\` or `\new...` breaks exactly this way. This
 project now catches and clearly reports the corruption if it happens,
 but forward slashes avoid it happening at all.
 
-## Using it with Claude Desktop / Claude Code (stdio)
+## Client integration: stdio
 
-Point `command` at your venv's Python interpreter directly (not the
-bare `mcp-eveng` name — Claude Desktop doesn't inherit your shell's
-`PATH`):
+Point `command` at your venv's actual Python interpreter path.
+Backslashes must be doubled (`\\`) inside JSON strings. Specific
+example is for Claude Desktop / Claude Code:
 
 ```json
 {
@@ -91,14 +84,10 @@ bare `mcp-eveng` name — Claude Desktop doesn't inherit your shell's
 }
 ```
 
-Replace the `command` path with your venv's actual Python interpreter
-path. Backslashes must be doubled (`\\`) inside JSON strings.
+## Client integration: streamable-http
 
-## Using it with Claude Desktop / Claude Code (streamable-http)
-
-Requires [Node.js](https://nodejs.org/) (for `npx`). Bridge through
-[`mcp-remote`](https://www.npmjs.com/package/mcp-remote) to a running
-`mcp-eveng --http` instance:
+Requires [Node.js](https://nodejs.org/) (for `npx`). Specific
+example is for Claude Desktop / Claude Code:
 
 ```json
 {

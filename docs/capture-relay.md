@@ -143,10 +143,12 @@ just adds the capture-relay section to it (copy the relevant block from
 - `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`, and
   `CAPTURE_RELAY_TLS_*` are read only by the standalone relay.
 
-If you're using `CAPTURE_SSH_KNOWN_HOSTS` or either `*_TLS_*` pair, see
-`install-linux.md`'s systemd section step 5 for creating
-`/etc/mcp-eveng` with the right ownership/permissions to put the actual
-files in.
+If you're using either `*_TLS_*` pair, see `install-linux.md`'s systemd
+section step 3 for creating `/etc/mcp-eveng` with the right
+ownership/permissions to put the actual cert/key files in.
+`CAPTURE_SSH_KNOWN_HOSTS` needs no separate setup — it reuses the same
+`~/.ssh` directory `CAPTURE_SSH_KEY_PATH`'s private key already lives
+in (created in step 2 above).
 
 ## 6. Create and start the systemd service (MCP server)
 
