@@ -7,6 +7,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-08-31
+
+### Documentation
+- **`install-windows.md` reviewed following user edits, per direct
+  request to check for breakage**: found one clear bug (a new heading,
+  `## HTTPs Cert Paths Require / `, that looked like an unfinished
+  edit -- trailing `/ ` with no continuation, and too narrow for its
+  own content, which covers every `*_PATH` variable, not just TLS
+  certs -- `CAPTURE_SSH_KEY_PATH` is an SSH key, not a cert). Renamed
+  to `Windows paths: use forward slashes`, content unchanged. No
+  cross-section collision risk here the way `install-linux.md` had
+  (no systemd section on Windows to collide with, and Install itself
+  wasn't touched). Also fixed: the TOC, which the reporter had already
+  flagged as not yet updated; the same inconsistent heading style
+  between the two "Client integration" sections found in
+  `install-linux.md` (now `Client integration: <transport>` in both
+  docs, for consistency); a stray blank line left inside a code block
+  from an earlier edit. Confirmed the removed `MCP_ALLOWED_HOSTS`
+  example/Windows-Firewall note/`mcp-remote` link were deliberate
+  simplifications, not left in place.
+
+- **`docs/manual-curl-commands.md`'s commands didn't work on Windows**
+  -- confirmed live, reported directly: every example used bash-style
+  single-quoted inline JSON (`-d '{"jsonrpc":...}'`), but `cmd.exe`
+  doesn't treat single quotes as string delimiters the way bash does,
+  so the payload arrives with literal quote characters baked in,
+  breaking JSON parsing (compounded by `cmd.exe`'s own argument
+  splitting getting confused by the JSON's many embedded double
+  quotes on top of that). Confirmed working alternative (per direct
+  testing, both `http://` and `https://`): write the JSON to a file
+  first, then `-d @file.json` instead of the inline `-d '...'` --
+  verified this mechanism directly against a real running server
+  before documenting it. Added as a new step 2, ahead of the existing
+  bash-style examples, rather than duplicating every example in both
+  styles.
+
+- **`install-linux.md` restructured following user edits, per direct
+  request to check for breakage**: the edited "Install" section now
+  always targets `/opt/mcp_eveng` with `sudo` (confirmed intentional,
+  not reverted) -- but this collided with the systemd section's own
+  identical clone command, which would fail with "destination path
+  already exists" for anyone following both sections in sequence (a
+  realistic path: quick stdio test first, systemd deployment later).
+  Fixed by making "Install" the single canonical first step and
+  removing the now-redundant clone/venv/install steps from the systemd
+  section, which just builds on it -- reducing that section from 7
+  steps to 5, with every cross-reference to the old step numbering
+  (`.env.example` x2, `capture-relay.md` x1) updated to match. Also
+  fixed along the way: a stale ".[dev] instead of `.`" instruction
+  that no longer corresponded to the actual command shown (which used
+  a full path, not a bare `.`) after an earlier edit; a repeated
+  "enviroment" typo; inconsistent heading style between the two
+  "Client integration" sections (one had parens, one didn't) -- both
+  now use `Client integration: <transport>`, which also produces
+  cleaner anchors than the previous "... - (...)" phrasing; the TOC,
+  which the reporter had already flagged as not yet updated to match.
+  A doubled `# #` introduced while fixing one of the cross-references
+  was caught and corrected before being included here.
+
+- **`eve-capture.bat`'s comments trimmed from 272 to 170 lines** -- per
+  direct feedback, refined every comment down to what a variable/section
+  is and its practical impact/options, with all "confirmed live"
+  debugging narrative and historical bug-fix context removed. Verified
+  by diffing every non-comment line against the previous version --
+  identical except two already-approved changes from earlier (the
+  `CURL` default path, window title format), confirming this pass
+  touched comments only, no functional change.
+- **Root cause found for the Windows `curl.exe`/Schannel
+  `SEC_E_INTERNAL_ERROR` failure documented in the previous release**:
+  not Windows' `curl.exe` itself, but the TLS certificate's key
+  algorithm. Confirmed by directly comparing two real certificates
+  (one that triggered the error, one that didn't) -- the only
+  meaningful difference was ECDSA P-521 (`secp521r1`) vs RSA, matching
+  a known, Microsoft-documented Windows Schannel incompatibility with
+  P-521 specifically (P-256/P-384 ECDSA and RSA are unaffected).
+  `eve-capture.bat`'s `CURL` variable now defaults back to Windows'
+  own bundled `C:\Windows\System32\curl.exe` (previously pointed at a
+  separate curl.se download by default) -- the earlier workaround is
+  no longer the primary advice, since the actual fix is regenerating
+  the certificate with a different key algorithm; the curl.se
+  alternative is still mentioned as a fallback if that's not an
+  option. Documented in `README.md`'s TLS section and both
+  `MCP_TLS_CERT_PATH`/`CAPTURE_RELAY_TLS_CERT_PATH` comments in
+  `.env.example`.
+
+- **README's "Available MCP tools" table now has `Comm Eve`/`Pro Eve`
+  columns**, ticked per tool, instead of inline "PRO only" notes
+  scattered through the description column (removed from
+  `set_link_quality`/`get_link_quality`/`list_captures`/`get_capture`'s
+  descriptions once the columns made them redundant -- "Disabled by
+  default" left in place, a separate concept from edition support).
+  Confirmed the 6 PRO-only tools match "EVE-NG Pro vs Community MCP
+  tools" exactly (`export_node`, `share_lab`, `set_link_quality`,
+  `get_link_quality`, `list_captures`, `get_capture`) -- `connect_interface`
+  is available on both editions (just behaves differently), so it's
+  ticked in both columns, not flagged as PRO-only.
+- **`install-linux.md`'s `/etc/mcp-eveng` step never actually showed
+  how to `chmod`/`chown` the PEM files themselves once you put them
+  there** -- only the directory. Added explicit commands, in the same
+  code block, for both the main process's `cert.pem`/`key.pem` and the
+  relay's `relay-cert.pem`/`relay-key.pem`, using the exact filenames
+  already suggested in `.env.example` so there's nothing to translate
+  between the two. Certs get `640` (not sensitive -- routinely served
+  publicly as part of the TLS handshake); keys get the stricter `600`.
+
+### Fixed
+- **`eve-capture.bat`'s window title (`EVE Capture - <name>`) was too
+  long** -- confirmed live, testing the window-title feature. Dropped
+  the `EVE Capture - ` prefix on both paths (relay/PRO and Community);
+  the window title is now just the capture name itself (e.g.
+  `Capture-2101248` or `vunl0_1_0`).
+
+### Documentation
+- **`CAPTURE_SSH_KNOWN_HOSTS`'s suggested path was `/etc/mcp-eveng`,
+  requiring a whole separate directory setup, when it could just reuse
+  the `~/.ssh` directory `CAPTURE_SSH_KEY_PATH`'s own private key
+  already lives in** -- per direct feedback, confirmed there was no
+  actual technical reason for this: `known_hosts` is a plain SSH
+  artifact with no special requirement to live under `/etc/`, unlike
+  TLS certs (a genuinely different kind of credential, where `/etc/
+  mcp-eveng` remains the right suggestion, unchanged). Now suggested at
+  `/home/mcp-eveng/.ssh/known_hosts`, matching `CAPTURE_SSH_KEY_PATH`'s
+  own existing convention -- no separate directory/permissions step
+  needed, since that directory already exists and is already correctly
+  permissioned by the time anyone reaches this setting.
+
 ## [0.6.1] - 2026-08-31
 
 ### Documentation
