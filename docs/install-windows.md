@@ -97,7 +97,7 @@ example is for Claude Desktop / Claude Code:
         "args": [
             "-y",
             "mcp-remote@latest",
-            "http://192.168.1.100:8000/mcp",
+            "http://192.168.1.50:8000/mcp",
             "--allow-http"
         ]
     }
@@ -107,15 +107,21 @@ example is for Claude Desktop / Claude Code:
 
 If `MCP_API_KEY` is set on the server (see README's Configuration
 section), add the header and switch to `https://` if TLS is also
-configured:
+configured. `NODE_TLS_REJECT_UNAUTHORIZED=0` below skips certificate
+verification — needed for a self-signed cert in a lab; remove it if
+your server has a CA-signed certificate, since it otherwise weakens
+the connection for no reason:
 
 ```json
 {
   "mcpServers": {
     "eveng_http": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
-      "env": { "AUTH_HEADER": "Bearer <your MCP_API_KEY value>" }
+      "args": ["-y", "mcp-remote@latest", "https://192.168.1.50:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+      "env": {
+        "AUTH_HEADER": "Bearer <your MCP_API_KEY value>",
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      }
     }
   }
 }

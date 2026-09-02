@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-01
+
+### Documentation
+- **Simplified main README's `MCP_API_KEY`/`MCP_TLS_*` section, per
+  direct request**, moving the fuller detail (constant-time comparison
+  note, the `mcp-remote` header JSON example, the self-signed-cert
+  `NODE_TLS_REJECT_UNAUTHORIZED` explanation) to a new "HTTPS and API
+  keys" section at the end of `docs/tools-reference.md`, and the
+  P-521/Schannel troubleshooting note to README's own Troubleshooting
+  section instead. Caught and fixed a dangling text fragment and a
+  duplicated paragraph left over from the edit before finishing.
+- **`NODE_TLS_REJECT_UNAUTHORIZED=0` confirmed to work through Claude
+  Desktop's own `env` block** -- it's a standard Node.js setting
+  affecting any TLS connection that process makes, and Claude
+  Desktop's `env` block is a standard child-process
+  environment-variable mechanism, functionally identical to setting it
+  in a shell before invoking the same command (which was already
+  confirmed working directly, live, in the previous entry below). Added
+  to the API-key/TLS example in both `install-linux.md` and
+  `install-windows.md`'s Client integration sections, switching that
+  example's URL to `https://` (it was still showing `http://` despite
+  the surrounding prose already saying "switch to https://") -- scoped
+  to that one example specifically, not added as an unconditional
+  default across every example, since it weakens the connection for
+  anyone with a real, CA-signed certificate who doesn't need it.
+- **README's "Capture relay" section led with "PRO only"** before
+  saying what the feature does -- reworded to lead with the
+  description, "Limited to EVE-NG PRO only" moved to the end, per
+  direct request.
+- **`install-linux.md`/`install-windows.md`'s Client integration
+  sections used inconsistent example IPs** -- the stdio example's
+  `EVENG_HOST` used `192.168.1.50`, but both streamable-http examples
+  in each file used `192.168.1.100` for the MCP server's own address.
+  Unified to `192.168.1.50` throughout both files' Client integration
+  sections, per direct request -- the separate `MCP_ALLOWED_HOSTS`
+  example in the "Running" section was left as-is, out of scope.
+- **`capture-relay.md`'s "Start app manually" was a subsection buried
+  under step 6 (the systemd step), and only mentioned the `python -m`
+  approach with the installed console script as an afterthought** --
+  broken out into its own step 7 (renumbering the two steps after it
+  to 8/9), with both approaches -- `mcp-eveng-capture-relay` and
+  `python -m mcp_eveng.capture_relay` -- given equal, explicit
+  treatment.
+- **`capture-relay.md`'s sudoers step described the edit command in
+  prose (`edit with visudo -f`) instead of giving a runnable command**
+  -- now a proper `sudo visudo -f /etc/sudoers.d/capture_relay` in its
+  own code block.
+- **`capture-relay.md`'s architecture diagram rendered broken** --
+  reported directly with a screenshot showing misaligned boxes and
+  crooked arrows. Root cause: it used Unicode box-drawing characters
+  with manually-counted spacing to align multi-line boxes across
+  several lines -- inherently fragile, since it depends on every
+  character (box-drawing and regular text alike) rendering at exactly
+  the same width, which doesn't hold across fonts/renderers. Replaced
+  with a simple top-to-bottom flow using only local, per-line
+  indentation (no cross-line column alignment needed at all) -- same
+  information, much more robust to render correctly regardless of
+  font.
+
 ## [0.6.2] - 2026-08-31
 
 ### Documentation

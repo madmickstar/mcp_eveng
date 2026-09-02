@@ -558,3 +558,50 @@ thing inside it.
 ⚠️ **This has not been exercised against a live EVE-NG server yet** — the
 logic is covered by unit tests, but please verify the actual flow
 end-to-end before relying on it for anything you can't afford to lose.
+
+## HTTPS and API keys
+
+#### `MCP_API_KEY` and `MCP_TLS_*`: optional extra security
+
+Neither is required — `MCP_ALLOWED_HOSTS` above is the only thing this
+server enforces by default. Both are opt-in for anyone who wants more than
+that, e.g. a `--http` deployment reachable beyond localhost.
+
+`MCP_API_KEY`, if set, requires every `--sse`/`--http` request to present
+it via `Authorization: Bearer <key>`, or the request gets a `401` before
+it ever reaches the MCP handler. Checked with a constant-time comparison,
+not `==`, so a wrong guess can't be narrowed down via response timing.
+Through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (see the
+install guides' streamable-http examples), add it as a header:
+
+```json
+"args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+"env": {"AUTH_HEADER": "Bearer <your MCP_API_KEY value>"}
+```
+
+`MCP_TLS_CERT_PATH`/`MCP_TLS_KEY_PATH` (both required together, or leave
+both unset) serve `--sse`/`--http` over HTTPS instead of plain HTTP.
+`MCP_TLS_KEY_PASSWORD` is only needed if the private key file itself is
+encrypted. Requires this server's own certificate to be one the *client*
+trusts — for a self-signed cert in a lab, setting
+`NODE_TLS_REJECT_UNAUTHORIZED=0` in `mcp-remote`'s own `env` block skips
+verification (a standard Node.js setting, not specific to `mcp-remote`,
+so it affects any TLS connection that process makes); use a CA-signed
+certificate for anything beyond that.
+
+If `MCP_TLS_CERT_PATH` points at a certificate file inclusive of
+certificate chain, with the CA certificate below it — confirmed
+directly: with the CA cert first, the server fails to start with
+`[X509: KEY_VALUES_MISMATCH] key values mismatch`, since the *first*
+certificate in the file is what OpenSSL matches against your private
+key, and the private key belongs to the server certificate, not the CA.
+This is a universal PEM chain-file convention (the same order
+Apache/nginx/every OpenSSL-based server expects), not specific to this
+project.
+
+For running the server and configuring it in Claude Desktop / Claude
+Code (both stdio and streamable-http), see the Linux/macOS or Windows
+guide — the exact commands and JSON differ enough between platforms
+(path syntax, shell env-var syntax, and how each OS handles `PATH` for
+GUI-launched subprocesses) that they're kept there rather than
+duplicated here.
