@@ -151,8 +151,18 @@ just adds the capture-relay section to it (copy the relevant block from
 - `CAPTURE_SSH_TIMEOUT_SECONDS`, `CAPTURE_TOKEN_TTL_SECONDS`, and
   `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` are read only by `mcp-eveng`
   (`list_captures`/`get_capture`).
-- `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`, and
-  `CAPTURE_RELAY_TLS_*` are read only by the standalone relay.
+- `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`,
+  `CAPTURE_RELAY_TOKEN_REQUIRED`, and `CAPTURE_RELAY_TLS_*` are read
+  only by the standalone relay.
+
+`CAPTURE_RELAY_TOKEN_REQUIRED` (default `true`) is the on/off switch
+for the whole token-based security model above — set to `false` to
+skip the signature/expiry checks entirely (any syntactically-valid
+token then authorizes streaming). `CAPTURE_TOKEN_TTL_SECONDS` still
+controls how long a normally-issued token stays valid while this is
+left at its default. Only turn this off on a network you already
+trust — the relay prints a warning at startup as a reminder when it's
+disabled.
 
 If you're using either `*_TLS_*` pair, see `install-linux.md`'s systemd
 section step 3 for creating `/etc/mcp-eveng` with the right
@@ -259,7 +269,7 @@ either app.
 - **One relay per EVE-NG host** — `get_capture`'s URL always points at
   a single fixed `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT`.
 - **No revocation beyond token expiry** — a leaked `capture://` URL is
-  valid for `CAPTURE_TOKEN_TTL_SECONDS` (60s default).
+  valid for `CAPTURE_TOKEN_TTL_SECONDS` (300s default).
 - **`docker`/`tcpdump` paths in sudoers are hardcoded** — confirm they
   match your EVE-NG host.
 - **If the `.bat`'s curl preflight fails or falls back to plink

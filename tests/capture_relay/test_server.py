@@ -258,6 +258,72 @@ def test_token_for_wrong_secret_is_rejected() -> None:
     assert response.status_code == 403
 
 
+# ============================================================================
+# token_required=False -- CAPTURE_RELAY_TOKEN_REQUIRED=false's effect
+# ============================================================================
+
+
+def test_missing_token_still_returns_400_when_not_required() -> None:
+    """A token is still required to be PRESENT (it's how the relay
+    learns which container to stream) -- token_required=False only
+    means its signature/expiry aren't checked."""
+    app = create_relay_app(ssh_settings(), open_stream=fake_open_stream([]), token_required=False)
+    client = TestClient(app)
+
+    response = client.get("/capture/stream")
+
+    assert response.status_code == 400
+
+
+def test_malformed_token_still_returns_400_when_not_required() -> None:
+    app = create_relay_app(ssh_settings(), open_stream=fake_open_stream([]), token_required=False)
+    client = TestClient(app)
+
+    response = client.get("/capture/stream?token=not-even-two-parts")
+
+    assert response.status_code == 400
+
+
+def test_wrong_secret_token_streams_successfully_when_not_required() -> None:
+    """The core behavior: a token that would normally be rejected with
+    403 (wrong secret) is accepted when verification is disabled."""
+    settings = ssh_settings(token_secret="the-relay-s-real-secret")
+    token = issue_token("Capture-2101248", "a-totally-different-secret", ttl_seconds=60)
+    app = create_relay_app(settings, open_stream=fake_open_stream([b"pcap-bytes"]), token_required=False)
+    client = TestClient(app)
+
+    response = client.get(f"/capture/stream?token={token}")
+
+    assert response.status_code == 200
+    assert response.content == b"pcap-bytes"
+
+
+def test_expired_token_streams_successfully_when_not_required() -> None:
+    settings = ssh_settings()
+    expired_token = issue_token("Capture-2101248", SECRET, ttl_seconds=-1)
+    app = create_relay_app(settings, open_stream=fake_open_stream([b"pcap-bytes"]), token_required=False)
+    client = TestClient(app)
+
+    response = client.get(f"/capture/stream?token={expired_token}")
+
+    assert response.status_code == 200
+    assert response.content == b"pcap-bytes"
+
+
+def test_valid_token_still_streams_correctly_when_not_required() -> None:
+    """Confirms the normal, well-formed case still works fine when
+    verification is disabled -- not just that bad tokens now pass."""
+    settings = ssh_settings()
+    token = issue_token("Capture-2101248", SECRET, ttl_seconds=60)
+    app = create_relay_app(settings, open_stream=fake_open_stream([b"pcap-bytes"]), token_required=False)
+    client = TestClient(app)
+
+    response = client.get(f"/capture/stream?token={token}")
+
+    assert response.status_code == 200
+    assert response.content == b"pcap-bytes"
+
+
 def test_dumpcap_command_is_prefixed_with_sudo() -> None:
     # Regression test: confirmed live that without sudo, docker exec
     # can't reach the daemon socket -- same underlying issue as
@@ -268,3 +334,34 @@ def test_dumpcap_command_is_prefixed_with_sudo() -> None:
     assert command.startswith("sudo docker exec ")
     assert "Capture-2101248" in command
     assert command.endswith("dumpcap -i eth0 -w -")
+
+
+def test_rejected_token_logs_the_specific_reason(caplog) -> None:
+    """Confirms an admin diagnosing unexpected 403s can distinguish a
+    secret mismatch from an expired token from the relay's own DEBUG
+    logs, even though the HTTP response stays deliberately vague."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="mcp_eveng.capture_relay")
+    settings = ssh_settings(token_secret="the-relay-s-real-secret")
+    wrong_secret_token = issue_token("Capture-2101248", "a-totally-different-secret", ttl_seconds=60)
+    app = create_relay_app(settings, open_stream=fake_open_stream([]))
+    client = TestClient(app)
+
+    client.get(f"/capture/stream?token={wrong_secret_token}")
+
+    assert "signature mismatch" in caplog.text
+
+
+def test_expired_token_logs_expired_specifically(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="mcp_eveng.capture_relay")
+    settings = ssh_settings()
+    expired_token = issue_token("Capture-2101248", SECRET, ttl_seconds=-1)
+    app = create_relay_app(settings, open_stream=fake_open_stream([]))
+    client = TestClient(app)
+
+    client.get(f"/capture/stream?token={expired_token}")
+
+    assert "expired" in caplog.text

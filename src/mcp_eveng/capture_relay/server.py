@@ -11,22 +11,27 @@ Built on Starlette rather than a new HTTP framework -- already a
 transitive dependency via `mcp[cli]`'s own `--http` transport, so this
 doesn't add anything new to the dependency graph.
 
+Token verification can be disabled entirely via
+`CAPTURE_RELAY_TOKEN_REQUIRED=false` (see `config.py`) -- an explicit
+admin opt-out for a trusted network, not the default.
+
 **The actual SSH+dumpcap streaming is unverified against a live
 target** -- this project's test environment has no real SSH server or
 docker host to exercise it against. What IS tested (see
-`tests/capture_relay/test_server.py`): token verification/rejection,
-the chunk-forwarding loop, EOF handling, and disconnect handling, all
-against a fake process/reader injected via `open_stream` in place of
-the real SSH connection. The real `asyncssh` calls (via
-`ssh_client.streaming_process`) are believed correct by inspection,
-matching this project's convention for unavoidable I/O-boundary code
-(see `client.py`'s `_get`/`_put`), but should be exercised live before
-relying on them in production.
+`tests/capture_relay/test_server.py`): token verification/rejection in
+both modes (required and disabled), the chunk-forwarding loop, EOF
+handling, and disconnect handling, all against a fake process/reader
+injected via `open_stream` in place of the real SSH connection. The
+real `asyncssh` calls (via `ssh_client.streaming_process`) are
+believed correct by inspection, matching this project's convention for
+unavoidable I/O-boundary code (see `client.py`'s `_get`/`_put`), but
+should be exercised live before relying on them in production.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import shlex
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -38,7 +43,9 @@ from starlette.routing import Route
 
 from .config import CaptureSSHSettings
 from .ssh_client import streaming_process as _default_streaming_process
-from .tokens import InvalidToken, verify_token
+from .tokens import InvalidToken, decode_token_unverified, verify_token
+
+logger = logging.getLogger("mcp_eveng.capture_relay")
 
 # Read buffer size per chunk -- not tied to actual traffic in any way,
 # dumpcap's own writes aren't chunked to any particular size.
@@ -104,6 +111,7 @@ def create_relay_app(
     settings: CaptureSSHSettings,
     open_stream: OpenStream = _default_streaming_process,
     *,
+    token_required: bool = True,
     read_chunk_bytes: int = DEFAULT_READ_CHUNK_BYTES,
     read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
 ) -> Starlette:
@@ -111,7 +119,10 @@ def create_relay_app(
 
     `open_stream` and the read tuning parameters are injectable so
     tests can supply a fake SSH process instead of a real one --
-    production code always uses the defaults.
+    production code always uses the defaults. `token_required=False`
+    is `CAPTURE_RELAY_TOKEN_REQUIRED`'s effect (see config.py) -- an
+    explicit admin opt-out of token verification entirely, not
+    something to default away from `True` in code.
     """
 
     async def stream_endpoint(request: Request):
@@ -120,9 +131,21 @@ def create_relay_app(
             return JSONResponse({"status": "error", "message": "missing token"}, status_code=400)
 
         try:
-            claim = verify_token(token, settings.token_secret.get_secret_value())
-        except InvalidToken:
-            return JSONResponse({"status": "error", "message": "invalid or expired token"}, status_code=403)
+            claim = (
+                verify_token(token, settings.token_secret.get_secret_value())
+                if token_required
+                else decode_token_unverified(token)
+            )
+        except InvalidToken as exc:
+            # The client-facing message stays deliberately vague (see
+            # tokens.py's own docstring) -- this specific reason (e.g.
+            # "signature mismatch" vs "expired") is only logged
+            # server-side, at DEBUG, for an admin diagnosing a rejected
+            # request they expected to succeed.
+            logger.debug("Rejected capture stream request: %s", exc)
+            message = "invalid or expired token" if token_required else "malformed token"
+            status_code = 403 if token_required else 400
+            return JSONResponse({"status": "error", "message": message}, status_code=status_code)
 
         return StreamingResponse(
             _stream_capture(

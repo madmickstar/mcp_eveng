@@ -65,7 +65,16 @@ def _check_tls_files_readable(cert_path: str | None, key_path: str | None) -> No
 def main() -> None:
     ssh_settings = get_capture_ssh_settings()
     listen_settings = get_relay_listen_settings()
-    app = create_relay_app(ssh_settings)
+    app = create_relay_app(ssh_settings, token_required=listen_settings.token_required)
+
+    if not listen_settings.token_required:
+        print(
+            "WARNING: CAPTURE_RELAY_TOKEN_REQUIRED=false -- token verification is "
+            "disabled. Any syntactically-valid token authorizes streaming, "
+            "including a tampered, hand-crafted, or expired one. Only appropriate "
+            "on a network you already trust.",
+            file=sys.stderr,
+        )
 
     # Matches the main mcp-eveng process's own convention (see
     # server.py's run()) -- stderr, not stdout, though this relay has no

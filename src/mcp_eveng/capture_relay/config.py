@@ -110,8 +110,16 @@ class CaptureSSHSettings(BaseSettings):
         ..., description="Shared HMAC secret for signing/verifying capture tokens -- see tokens.py."
     )
     token_ttl_seconds: int = Field(
-        default=60,
-        description="How long a get_capture token stays valid. Short by design -- see tokens.py.",
+        default=300,
+        description=(
+            "How long a get_capture token stays valid. It's the only "
+            "revocation mechanism there is, so keep it reasonably short -- "
+            "but confirmed live, 60s was too tight for a real, human-paced "
+            "workflow (clicking through EVE-NG's UI, the eve-wireshark "
+            "container starting, the Windows client launching), causing "
+            "persistent, hard-to-diagnose 403s even with correctly "
+            "synced clocks."
+        ),
     )
     ssh_timeout_seconds: float = Field(default=15.0, description="Timeout for docker ps lookups.")
 
@@ -142,6 +150,19 @@ class RelayListenSettings(BaseSettings):
 
     listen_host: str = Field(default="0.0.0.0")
     listen_port: int = Field(default=8001)
+    token_required: bool = Field(
+        default=True,
+        description=(
+            "If false, the relay streams for any syntactically-valid token "
+            "-- including a tampered, hand-crafted, or expired one -- "
+            "skipping the signature and expiry checks entirely. An "
+            "explicit opt-out of this project's whole capture-token "
+            "security model; only appropriate on a network you already "
+            "trust. CAPTURE_TOKEN_TTL_SECONDS (on the main process) still "
+            "controls how long a normally-issued token stays valid when "
+            "this is left at its default, true."
+        ),
+    )
     log_level: str = Field(
         default="INFO",
         description="Python logging level: DEBUG, INFO, WARNING, ERROR, or CRITICAL",

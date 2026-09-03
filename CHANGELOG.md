@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-03
+
+### Changed
+- **`CAPTURE_TOKEN_TTL_SECONDS` default raised from 60 to 300** --
+  confirmed by direct troubleshooting of the persistent 403s in the
+  entry above: with clocks already ruled out as synced, raising the
+  TTL to 300s fixed it. 60s was too tight for a real, human-paced
+  workflow (clicking through EVE-NG's UI, the eve-wireshark container
+  starting, the Windows client launching) even under normal
+  conditions, not just as a diagnostic edge case. Updated everywhere
+  this number was documented: `config.py`'s field default,
+  `issue_token()`'s own default parameter (for consistency, though
+  every real caller already passes an explicit value), `tokens.py`'s
+  module docstring, `tools/capture.py`'s `get_capture` docstring,
+  `.env.example` (both the value and its comment), and
+  `capture-relay.md`'s Known limitations. One test that asserted on
+  the literal default value updated to match; the several others using
+  `ttl_seconds=60` as an arbitrary explicit test value for token
+  mechanics (not testing the default itself) were left as-is.
+
+### Added
+- **The relay logged nothing at all about why a token was rejected**
+  -- prompted by a real report of persistent, unexplained 403s.
+  `stream_endpoint` now logs the specific `InvalidToken` reason
+  (`signature mismatch`, `expired`, `malformed token`/`payload`) at
+  DEBUG via a new `mcp_eveng.capture_relay` logger -- the client-facing
+  HTTP response stays deliberately vague either way (see `tokens.py`'s
+  own docstring on why), this is purely a `CAPTURE_RELAY_LOG_LEVEL=DEBUG`
+  diagnostic aid. Confirmed live: reproduced both a wrong-secret token
+  and an expired one against a real running relay and saw each logged
+  with its own distinct reason. 2 new tests.
+- **`CAPTURE_RELAY_TOKEN_REQUIRED`** -- new setting on the relay,
+  default `true` (unchanged behavior). Per direct request: an
+  admin-controlled way to disable the capture-token security model
+  entirely, for a network already trusted. `CAPTURE_TOKEN_TTL_SECONDS`
+  (pre-existing) already covered the "control how long the URL stays
+  live, in seconds" half of the request -- this adds the missing
+  enable/disable half. `get_capture` still always mints a real, signed
+  token exactly as before, no URL format or `.bat` script change --
+  the only change is on the relay's own verification side: a new
+  `decode_token_unverified()` in `tokens.py` (refactored to share
+  payload-decoding logic with `verify_token` cleanly, no duplication)
+  reads the container name out of a token's payload without checking
+  its signature or expiry. The relay prints a `WARNING` to stderr at
+  startup whenever this is disabled, as a standing reminder. Confirmed
+  live against a real running relay, not just unit-tested: a
+  wrong-secret token is correctly rejected (403) by default and
+  correctly accepted (200) with the setting disabled. 17 new tests
+  across `test_tokens.py`, `test_config.py`, `test_server.py`, and
+  `test_main.py` -- including that `main()` genuinely wires the
+  setting through to `create_relay_app`, not just present somewhere in
+  the settings object. Documented in `.env.example` and
+  `docs/capture-relay.md`.
+
 ## [0.6.3] - 2026-09-01
 
 ### Documentation
