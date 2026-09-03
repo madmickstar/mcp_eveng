@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-03
+
+### Documentation
+- **README's "Controlling which MCP tools are exposed" trimmed to
+  title, first paragraph, and the example** -- the rest (how the two
+  example files differ, what's disabled by default and why, how
+  `list_tools` reflects `tools.env` exactly) moved to a new section at
+  the top of `docs/tools-reference.md`, right after its own intro, per
+  direct request. Fixed one cross-reference that would have broken in
+  its new location -- "see ... above" now reads "see ... in the
+  README", since that section lives in a different file now. Added a
+  one-line pointer from README's trimmed section to
+  `docs/tools-reference.md` for the full detail.
+
 ## [0.7.0] - 2026-09-03
 
 ### Changed
