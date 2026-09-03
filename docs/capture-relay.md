@@ -13,8 +13,9 @@ own GUI already generates working `capture://` links.
 - [4. Sudoers (EVE-NG host)](#4-sudoers-eve-ng-host)
 - [5. Add capture-relay settings to your .env](#5-add-capture-relay-settings-to-your-env)
 - [6. Create and start the systemd service (MCP server)](#6-create-and-start-the-systemd-service-mcp-server)
-- [7. Enable the tools on the main mcp-eveng process](#7-enable-the-tools-on-the-main-mcp-eveng-process)
-- [8. The `.bat` companion and Windows registration](#8-the-bat-companion-and-windows-registration)
+- [7. Start the relay manually (any OS, including Windows)](#7-start-the-relay-manually-any-os-including-windows)
+- [8. Enable the tools on the main mcp-eveng process](#8-enable-the-tools-on-the-main-mcp-eveng-process)
+- [9. The `.bat` companion and Windows registration](#9-the-bat-companion-and-windows-registration)
 - [Known limitations](#known-limitations)
 
 ## Architecture
@@ -28,22 +29,30 @@ uses `extra="ignore"`), so nothing needs duplicating or kept in sync
 across files anymore.
 
 ```
- EVE-NG GUI                Windows client                 Linux host
-┌───────────┐  starts    ┌───────────────┐   capture://  ┌──────────────────┐
-│ right-click│ ─────────▶│ eve-wireshark │──────────────▶│ .bat companion   │
-│ > Capture  │  container │  container   │   URL (from   │ (registered      │
-└───────────┘             └───────────────┘   get_capture)│ against capture://)│
-                                                            └─────────┬────────┘
-                                              vunl*/pnet*? no │ yes
-                                    ┌───────────────────────┘         │
-                                    ▼                                 ▼
-                          curl (primary) or plink (fallback)   plink (existing,
-                                    │                           unmodified path)
-                                    ▼
-                    mcp-relay.service (own systemd unit, verifies
-                    token, SSHes into EVE-NG, docker exec ... dumpcap,
-                    streams the result back over plain chunked HTTP)
-                    ──▶ Wireshark (-k -i -)
+EVE-NG GUI (right-click > Capture)
+    │
+    ▼  starts
+Windows client: eve-wireshark container
+    │
+    ▼  capture:// URL (from get_capture)
+Linux host: .bat companion (registered against capture://)
+    │
+    ▼  is this a Community-style vunl*/pnet* URL?
+    │
+    ├─ no  → curl (primary) or plink (fallback)
+    │            │
+    │            ▼
+    │        mcp-relay.service (own systemd unit -- verifies the
+    │        token, SSHes into EVE-NG, docker exec ... dumpcap,
+    │        streams the result back over plain chunked HTTP)
+    │            │
+    │            ▼
+    │        Wireshark (-k -i -)
+    │
+    └─ yes → plink (Community's existing, unmodified path)
+                 │
+                 ▼
+             Wireshark (-k -i -)
 ```
 
 `list_captures`/`get_capture` (main process) and the relay authenticate
@@ -108,7 +117,9 @@ one machine and one account now.
 
 ## 4. Sudoers (EVE-NG host)
 
-`/etc/sudoers.d/capture_relay` (edit with `visudo -f`):
+```bash
+sudo visudo -f /etc/sudoers.d/capture_relay
+```
 
 ```
 # Allow EVE-NG PRO commands
@@ -140,8 +151,18 @@ just adds the capture-relay section to it (copy the relevant block from
 - `CAPTURE_SSH_TIMEOUT_SECONDS`, `CAPTURE_TOKEN_TTL_SECONDS`, and
   `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT` are read only by `mcp-eveng`
   (`list_captures`/`get_capture`).
-- `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`, and
-  `CAPTURE_RELAY_TLS_*` are read only by the standalone relay.
+- `CAPTURE_RELAY_LISTEN_HOST`/`_PORT`, `CAPTURE_RELAY_LOG_LEVEL`,
+  `CAPTURE_RELAY_TOKEN_REQUIRED`, and `CAPTURE_RELAY_TLS_*` are read
+  only by the standalone relay.
+
+`CAPTURE_RELAY_TOKEN_REQUIRED` (default `true`) is the on/off switch
+for the whole token-based security model above — set to `false` to
+skip the signature/expiry checks entirely (any syntactically-valid
+token then authorizes streaming). `CAPTURE_TOKEN_TTL_SECONDS` still
+controls how long a normally-issued token stays valid while this is
+left at its default. Only turn this off on a network you already
+trust — the relay prints a warning at startup as a reminder when it's
+disabled.
 
 If you're using either `*_TLS_*` pair, see `install-linux.md`'s systemd
 section step 3 for creating `/etc/mcp-eveng` with the right
@@ -169,17 +190,31 @@ sudo systemctl status mcp-relay.service
 sudo systemctl enable mcp-relay.service
 ```
 
-### Start app manually (any OS, including Windows)
+## 7. Start the relay manually (any OS, including Windows)
 
+Skip this if you're using the systemd service from step 6 — this is
+for manual testing, or running on an OS without systemd. Either
+activate the venv first and use the bare commands below, or call the
+full path to the installed script every time without activating —
+both work identically (see `install-linux.md`/`install-windows.md`'s
+own "Running" sections for the OS-specific activation/path syntax). No
+`--http`/`--sse` flag — the relay always listens on HTTP (or HTTPS, if
+`CAPTURE_RELAY_TLS_*` is set), reading `CAPTURE_RELAY_LISTEN_HOST`/
+`_PORT` from `.env` in the current working directory.
+
+Installed console script:
+
+```bash
+mcp-eveng-capture-relay
 ```
+
+Equivalent, via `python -m`:
+
+```bash
 python -m mcp_eveng.capture_relay
 ```
 
-or the installed console script directly: `mcp-eveng-capture-relay`.
-No `--http` flag — reads `CAPTURE_RELAY_LISTEN_HOST`/`_PORT` from
-`.env` in the current working directory.
-
-## 7. Enable the tools on the main mcp-eveng process
+## 8. Enable the tools on the main mcp-eveng process
 
 ```bash
 # in tools.env
@@ -187,7 +222,7 @@ list_captures=enabled
 get_capture=enabled
 ```
 
-## 8. The `.bat` companion and Windows registration
+## 9. The `.bat` companion and Windows registration
 
 Edit the top of `scripts/eve-capture.bat`:
 
@@ -234,7 +269,7 @@ either app.
 - **One relay per EVE-NG host** — `get_capture`'s URL always points at
   a single fixed `CAPTURE_RELAY_ADVERTISE_HOST`/`_PORT`.
 - **No revocation beyond token expiry** — a leaked `capture://` URL is
-  valid for `CAPTURE_TOKEN_TTL_SECONDS` (60s default).
+  valid for `CAPTURE_TOKEN_TTL_SECONDS` (300s default).
 - **`docker`/`tcpdump` paths in sudoers are hardcoded** — confirm they
   match your EVE-NG host.
 - **If the `.bat`'s curl preflight fails or falls back to plink

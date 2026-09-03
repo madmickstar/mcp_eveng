@@ -195,10 +195,10 @@ async def get_capture(
     one of the two, not both.
 
     The returned URL carries a token scoped to that one container,
-    valid for `ssh_settings.token_ttl_seconds` (60s by default) -- long
-    enough for the `.bat` companion to act on it, short enough that a
-    leaked URL stops being useful quickly. There's no revocation beyond
-    letting it expire.
+    valid for `ssh_settings.token_ttl_seconds` (300s by default) -- long
+    enough for a real, human-paced workflow to act on it, short enough
+    that a leaked URL stops being useful reasonably quickly. There's no
+    revocation beyond letting it expire.
     """
     error = await _require_pro(client)
     if error is not None:

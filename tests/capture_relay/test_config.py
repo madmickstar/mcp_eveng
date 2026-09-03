@@ -31,7 +31,7 @@ def test_capture_ssh_settings_defaults() -> None:
 
     assert settings.ssh_port == 22
     assert settings.ssh_known_hosts is None
-    assert settings.token_ttl_seconds == 60
+    assert settings.token_ttl_seconds == 300
     assert settings.ssh_timeout_seconds == 15.0
 
 
@@ -177,3 +177,14 @@ def test_ssh_known_hosts_windows_backslash_corruption_is_caught() -> None:
             token_secret="s3cret",
             _env_file=None,
         )
+
+
+def test_relay_token_required_defaults_to_true() -> None:
+    settings = RelayListenSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.token_required is True
+
+
+def test_relay_token_required_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("CAPTURE_RELAY_TOKEN_REQUIRED", "false")
+    settings = RelayListenSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.token_required is False

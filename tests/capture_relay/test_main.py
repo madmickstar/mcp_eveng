@@ -272,3 +272,89 @@ def test_main_exits_cleanly_before_uvicorn_when_tls_cert_unreadable(monkeypatch,
     finally:
         get_capture_ssh_settings.cache_clear()
         get_relay_listen_settings.cache_clear()
+
+
+# ============================================================================
+# token_required wiring -- CAPTURE_RELAY_TOKEN_REQUIRED's effect
+# ============================================================================
+
+
+def test_main_passes_token_required_true_by_default(monkeypatch) -> None:
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+
+    try:
+        with patch("uvicorn.run"), patch("mcp_eveng.capture_relay.__main__.create_relay_app") as mock_create:
+            relay_main.main()
+
+        _, kwargs = mock_create.call_args
+        assert kwargs["token_required"] is True
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_passes_token_required_false_when_configured(monkeypatch) -> None:
+    """Confirms CAPTURE_RELAY_TOKEN_REQUIRED genuinely reaches
+    create_relay_app, not just present somewhere in the settings
+    object."""
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+    monkeypatch.setenv("CAPTURE_RELAY_TOKEN_REQUIRED", "false")
+
+    try:
+        with patch("uvicorn.run"), patch("mcp_eveng.capture_relay.__main__.create_relay_app") as mock_create:
+            relay_main.main()
+
+        _, kwargs = mock_create.call_args
+        assert kwargs["token_required"] is False
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_prints_warning_when_token_required_is_false(monkeypatch, capsys) -> None:
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+    monkeypatch.setenv("CAPTURE_RELAY_TOKEN_REQUIRED", "false")
+
+    try:
+        with patch("uvicorn.run"):
+            relay_main.main()
+
+        captured = capsys.readouterr()
+        assert "CAPTURE_RELAY_TOKEN_REQUIRED=false" in captured.err
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()
+
+
+def test_main_prints_no_warning_by_default(monkeypatch, capsys) -> None:
+    get_capture_ssh_settings.cache_clear()
+    get_relay_listen_settings.cache_clear()
+    monkeypatch.setenv("CAPTURE_SSH_HOST", "192.168.1.50")
+    monkeypatch.setenv("CAPTURE_SSH_USERNAME", "capture-svc")
+    monkeypatch.setenv("CAPTURE_SSH_KEY_PATH", "/etc/mcp-eveng/capture-relay.key")
+    monkeypatch.setenv("CAPTURE_TOKEN_SECRET", "s3cret")
+
+    try:
+        with patch("uvicorn.run"):
+            relay_main.main()
+
+        captured = capsys.readouterr()
+        assert "TOKEN_REQUIRED" not in captured.err
+    finally:
+        get_capture_ssh_settings.cache_clear()
+        get_relay_listen_settings.cache_clear()

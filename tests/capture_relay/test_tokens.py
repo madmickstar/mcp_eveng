@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_eveng.capture_relay.tokens import InvalidToken, issue_token, verify_token
+from mcp_eveng.capture_relay.tokens import InvalidToken, decode_token_unverified, issue_token, verify_token
 
 SECRET = "test-secret-do-not-use-in-prod"
 
@@ -91,3 +91,61 @@ def test_different_containers_produce_different_tokens() -> None:
     assert token_a != token_b
     assert verify_token(token_a, SECRET).container == "Capture-1111111"
     assert verify_token(token_b, SECRET).container == "Capture-2222222"
+
+
+# ============================================================================
+# decode_token_unverified -- used only when CAPTURE_RELAY_TOKEN_REQUIRED=false
+# ============================================================================
+
+
+def test_decode_unverified_reads_container_from_a_correctly_signed_token() -> None:
+    token = issue_token("Capture-2101248", SECRET, ttl_seconds=60)
+
+    result = decode_token_unverified(token)
+
+    assert result.container == "Capture-2101248"
+
+
+def test_decode_unverified_accepts_a_token_signed_with_the_wrong_secret() -> None:
+    """The whole point: unlike verify_token, this never checks the
+    signature at all."""
+    token = issue_token("Capture-2101248", "a-totally-different-secret", ttl_seconds=60)
+
+    result = decode_token_unverified(token)
+
+    assert result.container == "Capture-2101248"
+
+
+def test_decode_unverified_accepts_an_expired_token() -> None:
+    """The whole point: unlike verify_token, this never checks expiry
+    at all."""
+    token = issue_token("Capture-2101248", SECRET, ttl_seconds=-100)  # already expired
+
+    result = decode_token_unverified(token)
+
+    assert result.container == "Capture-2101248"
+
+
+def test_decode_unverified_still_rejects_malformed_token_shape() -> None:
+    with pytest.raises(InvalidToken):
+        decode_token_unverified("not-even-two-dot-separated-parts")
+
+
+def test_decode_unverified_still_rejects_non_json_payload() -> None:
+    from mcp_eveng.capture_relay.tokens import _b64url_encode
+
+    bogus_payload_b64 = _b64url_encode(b"not json{{{")
+    token = f"{bogus_payload_b64}.anything-here-is-never-checked"
+
+    with pytest.raises(InvalidToken):
+        decode_token_unverified(token)
+
+
+def test_decode_unverified_still_rejects_payload_missing_container() -> None:
+    from mcp_eveng.capture_relay.tokens import _b64url_encode
+
+    incomplete_payload_b64 = _b64url_encode(b'{"iat":1,"exp":2}')  # no "container" key
+    token = f"{incomplete_payload_b64}.anything-here-is-never-checked"
+
+    with pytest.raises(InvalidToken):
+        decode_token_unverified(token)

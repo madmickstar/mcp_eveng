@@ -71,8 +71,8 @@ pip install -e .
 
 ## Capture relay
 
-PRO only. Streams an EVE-NG PRO Wireshark capture to a local
-Wireshark without a personal SSH+sudo account on the EVE-NG host.
+Stream Wireshark capture to a local Wireshark without a personal
+SSH+sudo account on the EVE-NG host. Limited to EVE-NG PRO only.
 
 **[Capture relay guide](docs/capture-relay.md)**
 
@@ -186,47 +186,20 @@ that, e.g. a `--http` deployment reachable beyond localhost.
 
 `MCP_API_KEY`, if set, requires every `--sse`/`--http` request to present
 it via `Authorization: Bearer <key>`, or the request gets a `401` before
-it ever reaches the MCP handler. Checked with a constant-time comparison,
-not `==`, so a wrong guess can't be narrowed down via response timing.
-Through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (see the
-install guides' streamable-http examples), add it as a header:
-
-```json
-"args": ["-y", "mcp-remote@latest", "http://192.168.1.100:8000/mcp", "--header", "Authorization:${AUTH_HEADER}"],
-"env": {"AUTH_HEADER": "Bearer <your MCP_API_KEY value>"}
-```
+it ever reaches the MCP handler.
 
 `MCP_TLS_CERT_PATH`/`MCP_TLS_KEY_PATH` (both required together, or leave
 both unset) serve `--sse`/`--http` over HTTPS instead of plain HTTP.
 `MCP_TLS_KEY_PASSWORD` is only needed if the private key file itself is
 encrypted. Requires this server's own certificate to be one the *client*
-trusts — for a self-signed cert in a lab, setting
-`NODE_TLS_REJECT_UNAUTHORIZED=0` in `mcp-remote`'s own `env` block skips
-verification (a standard Node.js setting, not specific to `mcp-remote`,
-so it affects any TLS connection that process makes); use a CA-signed
-certificate for anything beyond that.
+trusts.
 
-**If `MCP_TLS_CERT_PATH` points at a combined file (your server
-certificate and a CA certificate concatenated together), the server
-certificate must come first, with the CA certificate below it** —
-confirmed directly: with the CA cert first, the server fails to start
-with `[X509: KEY_VALUES_MISMATCH] key values mismatch`, since the
-*first* certificate in the file is what OpenSSL matches against your
-private key, and the private key belongs to the server certificate,
-not the CA. This is a universal PEM chain-file convention (the same
-order Apache/nginx/every OpenSSL-based server expects), not specific
-to this project.
-
-**If a Windows client connecting to this server (`curl.exe`, or
-anything else using Windows' native Schannel TLS stack) fails with
-`schannel: next InitializeSecurityContext failed: SEC_E_INTERNAL_ERROR`,
-check your certificate's key algorithm** — confirmed by directly
-comparing a cert that triggered this against one that didn't: the
-failing one used ECDSA with the P-521 curve (`secp521r1`). Windows
-Schannel has a documented incompatibility with P-521 certificates
-specifically (P-256/P-384 ECDSA and RSA are unaffected — this isn't
-"avoid ECDSA," just that one specific curve). Regenerate the
-certificate with RSA (2048-bit or larger) or ECDSA P-256/P-384 instead.
+If `MCP_TLS_CERT_PATH` points at a certificate file inclusive of
+certificate chain, the server certificate must come first, with the CA
+certificate below it — this is a universal PEM chain-file convention
+(the same order Apache/nginx/every OpenSSL-based server expects), not
+specific to this project. See `docs/tools-reference.md` for the full
+detail on both settings, including request/response examples.
 
 For running the server and configuring it in Claude Desktop / Claude Code
 (both stdio and streamable-http), see the
@@ -455,6 +428,18 @@ self-referential `lifespan` field type that it never calls
 field from the environment) and `mcp-eveng` suppresses it by default — if
 you still see it, you're likely on an `mcp` version where the warning text
 changed slightly; it's safe to ignore either way.
+
+**Streaming capture via curl** — if a Windows client connecting to this
+server (`curl.exe`, or anything else using Windows' native Schannel TLS
+stack) fails with `schannel: next InitializeSecurityContext failed:
+SEC_E_INTERNAL_ERROR`, check your certificate's key algorithm —
+confirmed by directly comparing a cert that triggered this against one
+that didn't: the failing one used ECDSA with the P-521 curve
+(`secp521r1`). Windows Schannel has a documented incompatibility with
+P-521 certificates specifically (P-256/P-384 ECDSA and RSA are
+unaffected — this isn't "avoid ECDSA," just that one specific curve).
+Regenerate the certificate with RSA (2048-bit or larger) or ECDSA
+P-256/P-384 instead.
 
 ## Manual curl commands
 
