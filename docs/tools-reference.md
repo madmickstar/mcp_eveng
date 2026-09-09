@@ -5,6 +5,60 @@ each tool's behavior — moved out of the main README to keep that focused
 on getting started. See the README's "Available tools" section for the
 full tool list and a one-line description of each.
 
+## Controlling which MCP tools are exposed
+
+Every tool can be individually enabled or disabled, via a dedicated
+dotenv-syntax config file — kept separate from the main `.env` so tool
+visibility is easy to review and diff independently of connection
+settings. Copy **`tools.env.pro.example`** (PRO edition) or
+**`tools.env.comm.example`** (Community edition) to `tools.env` (or point
+`MCP_TOOLS_CONFIG_PATH` at wherever you keep it) and set any tool to
+`enabled` or `disabled`:
+
+```
+get_status=enabled
+list_users=disabled
+```
+
+The two example files list exactly the same tools — full parity, nothing
+omitted from either — and differ only in the *value* of two lines:
+`export_node`/`share_lab` are `enabled` in the PRO file and `disabled` in
+the Community one, since both are PRO-only features (see
+"EVE-NG Pro vs Community MCP tools" in the README) with nothing useful to
+do on Community.
+Everything else, including the six user-management tools, is listed
+identically in both files: confirmed via direct manual testing against a
+real Community server (adding a second admin user; adding a folder and
+moving a lab into it) that user management and folder/lab operations work
+normally there — they're disabled by default on both editions for the
+same general reason (not exposing user administration to an LLM by
+default), not because Community can't support them. Nothing stops you
+from enabling `export_node`/`share_lab` on Community anyway if you'd
+rather see the tools' own clear edition-check error message than not see
+them at all — they're edition-gated at call time regardless of which file
+you start from.
+
+Any tool not listed in the file defaults to enabled. Any value other than
+`disabled` (case-insensitive) is treated as enabled, so a typo in the file
+fails safe — the tool stays visible rather than silently disappearing.
+
+**The six user-management tools (`list_users`, `get_user`, `add_user`,
+`edit_user`, `delete_user`, `list_user_roles`) plus `delete_lab` are
+disabled by default**, even with no `tools.env` file present at all —
+EVE-NG user administration often isn't something you want exposed to an
+LLM by default, and deleting an entire lab is a more severe,
+harder-to-recover-from action than deleting one thing inside it (unlike
+`delete_folder`/`delete_lab_node`/`delete_lab_network`, all still enabled
+by default). Set any of them to `enabled` in `tools.env` to turn them
+back on.
+
+A disabled tool isn't just hidden with an error if called — it's never
+registered with the MCP server at all, so it doesn't appear in the tool
+list a connected client sees in the first place. Call `list_tools` (with
+no arguments) at any time to get a single authoritative answer to "what's
+actually available right now" — it reflects `tools.env` exactly, since it
+just reports what actually got registered.
+
 ## Sessions and relogin
 
 EVE-NG only allows **one active session per user account** — confirmed
