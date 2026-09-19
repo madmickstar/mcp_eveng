@@ -285,3 +285,47 @@ def test_tls_path_corruption_check_passes_normal_windows_paths_with_forward_slas
         _env_file=None,  # type: ignore[call-arg]
     )
     assert settings.tls_cert_path == "C:/path/to/cert.pem"
+
+
+# -- File logging (log_file_enabled / log_dir / log_max_mb / log_backup_count) --
+
+
+def test_log_file_settings_defaults() -> None:
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.log_file_enabled is False
+    assert settings.log_dir == "log"
+    assert settings.log_max_mb == 10.0
+    assert settings.log_backup_count == 5
+
+
+def test_log_file_settings_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("MCP_LOG_FILE_ENABLED", "true")
+    monkeypatch.setenv("MCP_LOG_DIR", "/var/log/mcp-eveng")
+    monkeypatch.setenv("MCP_LOG_MAX_MB", "25")
+    monkeypatch.setenv("MCP_LOG_BACKUP_COUNT", "3")
+
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.log_file_enabled is True
+    assert settings.log_dir == "/var/log/mcp-eveng"
+    assert settings.log_max_mb == 25.0
+    assert settings.log_backup_count == 3
+
+
+def test_log_max_mb_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="MCP_LOG_MAX_MB must be greater than 0"):
+        MCPTransportSettings(log_max_mb=0, _env_file=None)  # type: ignore[call-arg]
+
+
+def test_log_backup_count_rejects_zero() -> None:
+    """Regression guard: RotatingFileHandler treats backupCount=0 as 'never
+    roll over, let the file grow unbounded', which would silently defeat the
+    whole point of this setting."""
+    with pytest.raises(ValueError, match="MCP_LOG_BACKUP_COUNT must be at least 1"):
+        MCPTransportSettings(log_backup_count=0, _env_file=None)  # type: ignore[call-arg]
+
+
+def test_log_dir_windows_backslash_corruption_is_caught() -> None:
+    corrupted = "C:\tfolder\\logs"  # literal tab, as dotenv would produce from "C:\to..."
+    with pytest.raises(ValueError, match=r"MCP_LOG_DIR contains a literal \\t"):
+        MCPTransportSettings(log_dir=corrupted, _env_file=None)  # type: ignore[call-arg]

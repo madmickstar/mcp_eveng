@@ -39,6 +39,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .config import MCPTransportSettings, Transport, get_mcp_settings
 from .dependencies import close_client, get_client
 from .tool_config import load_tool_status, make_enabled_predicate
+from .tool_logging import ToolCallLoggingFastMCP, build_log_handlers
 from .tools import capture, console, folders, labs, meta, networks, nodes, quality, system, users
 
 logger = logging.getLogger("mcp_eveng")
@@ -105,7 +106,7 @@ def create_server(settings: MCPTransportSettings | None = None, transport: Trans
     transport_security = _build_transport_security(settings, transport)
     enabled = make_enabled_predicate(load_tool_status(settings.tools_config_path))
 
-    mcp = FastMCP(
+    mcp = ToolCallLoggingFastMCP(
         "mcp-eveng",
         instructions=(
             "Tools for automating an EVENG network emulator instance: manage "
@@ -225,13 +226,26 @@ def run(transport: Transport = "stdio") -> None:
     settings = get_mcp_settings()
     # stdout is reserved for the stdio JSON-RPC stream -- logs always go to
     # stderr, regardless of transport, so they never corrupt the protocol.
-    logging.basicConfig(
-        level=settings.log_level,
-        stream=sys.stderr,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    # A rotating log file under MCP_LOG_DIR is an additional destination,
+    # only added when MCP_LOG_FILE_ENABLED is true -- see tool_logging.py.
+    handlers = build_log_handlers(
+        file_enabled=settings.log_file_enabled,
+        log_dir=settings.log_dir,
+        max_mb=settings.log_max_mb,
+        backup_count=settings.log_backup_count,
+        stderr_stream=sys.stderr,
     )
+    logging.basicConfig(level=settings.log_level, handlers=handlers)
     mcp = create_server(settings, transport)
     logger.info("Starting mcp-eveng with transport=%s", transport)
+    if settings.log_file_enabled:
+        logger.info(
+            "Also writing logs to %s/%s (rolling every %.1fMB, keeping %d backup file(s)).",
+            settings.log_dir,
+            "mcp-eveng.log",
+            settings.log_max_mb,
+            settings.log_backup_count,
+        )
     try:
         if transport == "stdio":
             mcp.run(transport="stdio")

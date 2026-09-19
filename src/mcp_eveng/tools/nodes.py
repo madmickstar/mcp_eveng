@@ -1907,9 +1907,60 @@ async def stop_node(client: EvengClient, lab_path: str, node_id: int | None = No
     return await _loop_node_action(lab_path, nodes, client.stop_node, "stopped")
 
 
-async def wipe_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
-    """Wipe one node (or all nodes), deleting saved config so it rebuilds from image."""
-    return await client.wipe_node(lab_path, node_id)
+async def wipe_node(
+    client: EvengClient,
+    lab_path: str,
+    node_id: int | str | None = None,
+    confirm: bool = False,
+) -> dict[str, Any]:
+    """Wipe one node, deleting its saved config so it rebuilds from image.
+
+    Wiping *every* node in the lab is a separate, explicit, confirmed
+    action -- pass `node_id="all"` (never just omitted: an omitted
+    `node_id` used to mean "wipe everything", which is exactly the kind
+    of quiet, high-blast-radius surprise this guards against). The first
+    `node_id="all"` call wipes nothing -- it reports how many nodes are
+    in the lab and asks for `confirm=true` before anything actually
+    happens; only a second call with `confirm=true` (and `node_id="all"`
+    again) wipes them.
+    """
+    if node_id is None:
+        return {
+            "status": "error",
+            "message": (
+                "node_id is required. Pass a specific node's id to wipe just that "
+                'node, or node_id="all" to wipe every node in the lab -- which asks '
+                "for confirmation before it actually wipes anything."
+            ),
+        }
+
+    if isinstance(node_id, str) and node_id.strip().lower() != "all":
+        return {
+            "status": "error",
+            "message": f'node_id must be a node id, or the literal string "all" -- got {node_id!r}.',
+        }
+
+    if isinstance(node_id, int):
+        return await client.wipe_node(lab_path, node_id)
+
+    nodes = await _all_node_ids_and_names(client, lab_path)
+    if not nodes:
+        return {"status": "cancelled", "message": "No nodes found in this lab."}
+
+    if not confirm:
+        plural = "s" if len(nodes) != 1 else ""
+        described = ", ".join(f"{name} (id {nid})" for nid, name in nodes)
+        return {
+            "status": "confirmation_required",
+            "message": (
+                f"This will wipe ALL {len(nodes)} node{plural} in this lab, deleting "
+                f"each one's saved config so it rebuilds from image: {described}.\n\n"
+                "Reply 'accept' or 'yes' to proceed; anything else cancels."
+            ),
+            "data": {"matches": [f"{name} (id {nid})" for nid, name in nodes]},
+        }
+
+    return await client.wipe_node(lab_path, None)
 
 
 async def export_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
@@ -2475,14 +2526,26 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
     if enabled("wipe_node"):
 
         @mcp.tool(name="wipe_node")
-        async def _wipe_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
-            """Wipe one node (or all nodes), deleting saved config/VLANs so it rebuilds from image.
+        async def _wipe_node(lab_path: str, node_id: int | str | None = None, confirm: bool = False) -> dict[str, Any]:
+            """Wipe one node, deleting its saved config/VLANs so it rebuilds from image.
+
+            Wiping *every* node is separate and confirmed: pass
+            node_id="all" (never just omitted) to wipe the whole lab.
+            The first call with node_id="all" wipes nothing -- it lists
+            every node about to be wiped and asks for confirm=true;
+            call again the same way with confirm=true to actually wipe
+            them all.
 
             Args:
                 lab_path: Full path to the .unl lab file.
-                node_id: Node id to wipe, or omit to wipe all nodes.
+                node_id: Node id to wipe, or "all" to wipe every node
+                    (with confirmation -- see above). Required; there's
+                    no default "wipe everything" behavior.
+                confirm: Set true on the second node_id="all" call to
+                    actually wipe every node. Ignored for a specific
+                    node_id.
             """
-            return await wipe_node(await get_client(), lab_path, node_id)
+            return await wipe_node(await get_client(), lab_path, node_id, confirm)
 
     if enabled("export_node"):
 

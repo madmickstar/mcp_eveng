@@ -742,6 +742,82 @@ async def test_eve_stop_wipe_delegate_correctly() -> None:
     client.wipe_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)
 
 
+async def test_wipe_node_requires_node_id() -> None:
+    """The dangerous "omit node_id to wipe every node" default is gone --
+    node_id is now mandatory (a specific id, or the literal "all")."""
+    client = make_client()
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl")
+
+    assert result["status"] == "error"
+    assert "node_id is required" in result["message"]
+    client.wipe_node.assert_not_awaited()
+    client.list_lab_nodes.assert_not_awaited()
+
+
+async def test_wipe_node_rejects_non_all_string() -> None:
+    client = make_client()
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl", "everything")
+
+    assert result["status"] == "error"
+    assert "everything" in result["message"]
+    client.wipe_node.assert_not_awaited()
+
+
+async def test_wipe_node_all_without_confirm_lists_nodes_and_wipes_nothing() -> None:
+    client = make_client(
+        list_lab_nodes={
+            "status": "success",
+            "data": {"1": {"id": 1, "name": "RTR-101"}, "2": {"id": 2, "name": "vIOS-SW1"}},
+        },
+    )
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl", "all")
+
+    assert result["status"] == "confirmation_required"
+    assert "ALL 2 nodes" in result["message"]
+    assert "RTR-101 (id 1)" in result["message"]
+    assert "vIOS-SW1 (id 2)" in result["message"]
+    client.wipe_node.assert_not_awaited()
+
+
+async def test_wipe_node_all_is_case_and_whitespace_insensitive() -> None:
+    client = make_client(
+        list_lab_nodes={"status": "success", "data": {"1": {"id": 1, "name": "RTR-101"}}},
+    )
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl", "  All  ")
+
+    assert result["status"] == "confirmation_required"
+    client.wipe_node.assert_not_awaited()
+
+
+async def test_wipe_node_all_with_confirm_wipes_every_node() -> None:
+    client = make_client(
+        list_lab_nodes={
+            "status": "success",
+            "data": {"1": {"id": 1, "name": "RTR-101"}, "2": {"id": 2, "name": "vIOS-SW1"}},
+        },
+        wipe_node={"status": "success"},
+    )
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl", "all", confirm=True)
+
+    assert result["status"] == "success"
+    # The underlying bulk wipe-everything call, made only after confirmation.
+    client.wipe_node.assert_awaited_once_with("/User1/Lab 1.unl", None)
+
+
+async def test_wipe_node_all_with_confirm_but_no_nodes_is_cancelled() -> None:
+    client = make_client(list_lab_nodes={"status": "success", "data": {}})
+
+    result = await nodes.wipe_node(client, "/User1/Lab 1.unl", "all", confirm=True)
+
+    assert result["status"] == "cancelled"
+    client.wipe_node.assert_not_awaited()
+
+
 # -- export_node: PRO-only, edition-gated -----------------------------
 
 

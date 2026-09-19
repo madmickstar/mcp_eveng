@@ -184,6 +184,30 @@ class MCPTransportSettings(BaseSettings):
         default=None,
         description="Password for tls_key_path, if the private key itself is encrypted.",
     )
+    log_file_enabled: bool = Field(
+        default=False,
+        description=(
+            "Also write logs to a rotating file under log_dir. Applies to every "
+            "transport (stdio/sse/streamable-http) -- stderr is always used "
+            "regardless of this setting; this adds a second destination."
+        ),
+    )
+    log_dir: str = Field(
+        default="log",
+        description=(
+            "Directory that rotating log files are written to when log_file_enabled "
+            "is true. Created automatically if it doesn't exist. A relative path is "
+            "resolved from the process's current working directory."
+        ),
+    )
+    log_max_mb: float = Field(
+        default=10.0,
+        description="Roll over to a new log file once the current one reaches this many megabytes.",
+    )
+    log_backup_count: int = Field(
+        default=5,
+        description="Number of rolled-over log files to keep before the oldest is deleted.",
+    )
 
     @model_validator(mode="after")
     def _tls_cert_and_key_together(self) -> MCPTransportSettings:
@@ -205,6 +229,29 @@ class MCPTransportSettings(BaseSettings):
     def _check_tls_key_path_corruption(cls, v: str | None) -> str | None:
         if v is not None:
             _check_windows_path_corruption(v, "MCP_TLS_KEY_PATH")
+        return v
+
+    @field_validator("log_dir", mode="after")
+    @classmethod
+    def _check_log_dir_corruption(cls, v: str) -> str:
+        _check_windows_path_corruption(v, "MCP_LOG_DIR")
+        return v
+
+    @field_validator("log_max_mb", mode="after")
+    @classmethod
+    def _check_log_max_mb_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"MCP_LOG_MAX_MB must be greater than 0, got {v!r}")
+        return v
+
+    @field_validator("log_backup_count", mode="after")
+    @classmethod
+    def _check_log_backup_count_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                "MCP_LOG_BACKUP_COUNT must be at least 1 -- Python's RotatingFileHandler "
+                f"treats 0 as 'never roll over, let the file grow unbounded', got {v!r}"
+            )
         return v
 
     @field_validator("log_level", mode="before")

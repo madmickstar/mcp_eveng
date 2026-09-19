@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-10
+
+### Fixed
+- **`wipe_node`: wiping every node in a lab is no longer the default for
+  an omitted `node_id`.** That silent "no `node_id` -> wipe everything"
+  behavior was exactly the kind of quiet, high-blast-radius surprise a
+  destructive bulk action shouldn't have. Wiping the whole lab now needs
+  an explicit `node_id="all"` (anything else non-numeric is rejected)
+  *and* a `confirm=true` follow-up call: the first `node_id="all"` call
+  wipes nothing and instead reports how many nodes are in the lab and
+  lists them by name, then only a second call, with `confirm=true` and
+  `node_id="all"` again, actually wipes them. A specific numeric
+  `node_id` still wipes immediately, unaffected -- this only changes the
+  "wipe everything" path.
+
+### Added
+- **Every MCP tool call is now logged**, as structured key=value fields:
+  `status` (`call`, `finished`, or `error`), `tool` (the tool name),
+  `client` (the connecting client's `host:port` for `--sse`/`--http`,
+  or `stdio` for the stdio transport), and either `arguments` (JSON, on
+  the initial `call` line, with sensitive-looking values redacted -- see
+  below) or `duration_ms` and (for `error`) the error message on the
+  matching follow-up line. The line's own leading log timestamp uses
+  ISO-8601 with milliseconds (`Z` for UTC, `+HH:MM`/`-HH:MM` for any
+  other offset, in the server process's local timezone), via a small
+  custom `logging.Formatter` -- so this applies to every log line the
+  project writes, not just tool-call lines; there's no separate
+  `timestamp=` field duplicating it in the message body. Implemented as
+  a single interception point (`ToolCallLoggingFastMCP.call_tool` in the
+  new `tool_logging.py`, subclassing the `mcp` SDK's `FastMCP`) rather
+  than touching each of the ~47 individual `@mcp.tool` registrations --
+  confirmed by reading the SDK's own source that `FastMCP.call_tool` is
+  the one choke point every tool call passes through, on every transport
+  (stdio/sse/streamable-http alike). Logged at `INFO`, unconditionally --
+  no separate toggle, since this is the main thing worth logging.
+- **Sensitive argument values (passwords, API keys, tokens, secrets,
+  credentials -- matched case-insensitively by argument name, e.g.
+  `password`, `rdp_password`, `api_key`) are redacted to `***REDACTED***`
+  before being logged**, so a tool call like `add_user`/`edit_user`
+  (`password`) or an RDP console node edit (`rdp_password`) never writes
+  the real value to the log. The argument name itself is still logged --
+  only the value is masked.
+- **Optional rotating log file**, in addition to the existing stderr
+  output (which is unaffected and still always used): `MCP_LOG_FILE_ENABLED`
+  (default `false`), `MCP_LOG_DIR` (default `log`, created automatically),
+  `MCP_LOG_MAX_MB` (default `10`), `MCP_LOG_BACKUP_COUNT` (default `5`,
+  must be >= 1 -- `0` would silently disable rollover entirely in Python's
+  own `RotatingFileHandler`, which defeats the setting's whole point).
+  Applies to every transport, including stdio, the same way
+  `MCP_TOOLS_CONFIG_PATH` already does. `MCP_LOG_DIR` gets the same
+  Windows-path-corruption check as the existing `*_PATH` settings.
+
 ## [0.7.1] - 2026-09-03
 
 ### Documentation

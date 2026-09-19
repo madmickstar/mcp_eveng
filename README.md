@@ -127,14 +127,20 @@ the https/443 defaults.
 | `MCP_TLS_CERT_PATH` | unset | TLS certificate file. Serves HTTPS instead of plain HTTP when set together with `MCP_TLS_KEY_PATH` |
 | `MCP_TLS_KEY_PATH` | unset | TLS certificate's private key file. Required together with `MCP_TLS_CERT_PATH` |
 | `MCP_TLS_KEY_PASSWORD` | unset | Only needed if the private key above is itself password-protected |
+| `MCP_LOG_FILE_ENABLED` | `false` | Also write logs to a rotating file under `MCP_LOG_DIR`, in addition to stderr |
+| `MCP_LOG_DIR` | `log` | Directory for rotating log files (created automatically). Only used when `MCP_LOG_FILE_ENABLED` is true |
+| `MCP_LOG_MAX_MB` | `10` | Roll over to a new log file once the current one reaches this many megabytes |
+| `MCP_LOG_BACKUP_COUNT` | `5` | Number of rolled-over log files to keep before the oldest is deleted |
 
 All variables can also be set as real environment variables, which take
 precedence over `.env`.
 
-`MCP_TOOLS_CONFIG_PATH` (default `tools.env`) applies to **every**
-transport, including stdio — it isn't scoped to `--sse`/`--http` like the
-rest of this table, since tool registration itself doesn't depend on
-transport. See "Controlling which MCP tools are exposed" below.
+`MCP_TOOLS_CONFIG_PATH` (default `tools.env`) and the four `MCP_LOG_FILE_*`
+variables apply to **every** transport, including stdio — they aren't
+scoped to `--sse`/`--http` like the rest of this table, since tool
+registration and logging setup both happen before transport is even
+dispatched on. See "Controlling which MCP tools are exposed" below and
+"`MCP_LOG_LEVEL`: options and where logs go" just below that.
 
 #### `MCP_LOG_LEVEL`: options and where logs go
 
@@ -142,9 +148,51 @@ Options are the standard Python logging levels — `DEBUG`, `INFO`, `WARNING`,
 `ERROR`, `CRITICAL` (case-insensitive; an invalid value fails fast at
 startup). Logs always go to **stderr**, never stdout, in every transport —
 not just stdio — because stdout is reserved for the stdio JSON-RPC stream
-and nothing else should ever print to it. There's no file logging built in;
-redirect stderr yourself if you want persistent logs, e.g.
-`mcp-eveng --http 2>> mcp-eveng.log`.
+and nothing else should ever print to it. Every log line's own leading
+timestamp is ISO-8601 with milliseconds: `Z` for UTC, or a `+HH:MM`/
+`-HH:MM` offset for the server process's local timezone otherwise — e.g.
+`2026-09-11T19:31:00.001Z INFO mcp_eveng: Starting mcp-eveng with
+transport=stdio`.
+
+**Every tool call is logged** at `INFO` as key=value fields — `status`
+(`call`, `finished`, or `error`), the tool name, the connecting client's
+address, and (on the initial `call` line) the JSON arguments the client
+passed, with sensitive-looking values redacted (see below), or (on the
+matching `finished`/`error` follow-up line) how long the call took and,
+for `error`, the error message. This is on unconditionally; there's no
+separate toggle for it, since it's the main thing worth logging in the
+first place. Example:
+
+```
+2026-09-11T19:31:00.001Z INFO mcp_eveng.tool_calls: status=call tool=get_lab client=192.168.1.50:54321 arguments={"path": "/my-lab.unl"}
+2026-09-11T19:31:00.043Z INFO mcp_eveng.tool_calls: status=finished tool=get_lab client=192.168.1.50:54321 duration_ms=42.1
+```
+
+There's no separate `timestamp=` field in the message body — the line's
+own leading timestamp above already covers it. `client` is
+ `host:port` of the connecting
+client for `--sse`/`--http` (taken from the underlying HTTP connection),
+or `stdio` when running over stdio — a local subprocess pipe genuinely has
+no network client address to report.
+
+**Sensitive argument values are redacted before logging** — any argument
+whose name looks like a password, secret, token, API key, or credential
+(matched case-insensitively, e.g. `password`, `rdp_password`, `api_key`)
+is logged as `***REDACTED***` instead of its real value; the argument name
+itself still appears, so you can see *that* a password was being changed,
+just not what to. See `_SENSITIVE_ARGUMENT_SUFFIXES` in `tool_logging.py`
+if you ever need to extend the list for a new argument.
+
+**Optional rotating log file:** set `MCP_LOG_FILE_ENABLED="true"` to also
+write everything to a rotating file (`mcp-eveng.log` inside `MCP_LOG_DIR`,
+default `log/` — created automatically), on top of stderr, which is always
+used regardless of this setting. `MCP_LOG_MAX_MB` (default `10`) controls
+when it rolls over to `mcp-eveng.log.1`, `.2`, etc.; `MCP_LOG_BACKUP_COUNT`
+(default `5`) controls how many rolled-over files are kept before the
+oldest is deleted. If you'd rather redirect stderr yourself instead
+(e.g. `mcp-eveng --http 2>> mcp-eveng.log`), that still works too — the two
+approaches aren't mutually exclusive, though most people will want one or
+the other, not both.
 
 #### `MCP_ALLOWED_HOSTS`: DNS-rebinding protection
 
@@ -281,7 +329,7 @@ and why these six specifically differ.
 | | `connect_interface` | Wires a node's interface to another node or to a network. | ✅ | ✅ |
 | | `start_node` | Starts a node, or every node in a lab. | ✅ | ✅ |
 | | `stop_node` | Stops a node, or every node in a lab. | ✅ | ✅ |
-| | `wipe_node` | Wipes a node's saved configuration. | ✅ | ✅ |
+| | `wipe_node` | Wipes a node's saved configuration. Wiping *every* node needs `node_id="all"` plus a `confirm=true` follow-up call -- an omitted `node_id` is rejected rather than defaulting to "wipe everything". | ✅ | ✅ |
 | | `export_node` | Exports a node's running configuration. | | ✅ |
 | | `set_link_quality` | Sets per-connection delay/jitter/packet-loss/bandwidth. | | ✅ |
 | | `get_link_quality` | Gets current delay/jitter/packet-loss/bandwidth on both sides of a connection. | | ✅ |
