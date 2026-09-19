@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 
@@ -31,11 +32,8 @@ async def test_call_tool_logs_status_call_and_tool_and_arguments(
     # No real EVE-NG server is reachable in tests, so get_status errors out --
     # but the pre-call log line must still have been written first.
     mcp = _make_server()
-    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"):
-        try:
-            await mcp.call_tool("get_status", {})
-        except Exception:
-            pass
+    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"), contextlib.suppress(Exception):
+        await mcp.call_tool("get_status", {})
 
     messages = [r.message for r in caplog.records]
     assert any("status=call" in m and "tool=get_status" in m and "arguments={}" in m for m in messages)
@@ -43,11 +41,8 @@ async def test_call_tool_logs_status_call_and_tool_and_arguments(
 
 async def test_call_tool_logs_client(caplog: pytest.LogCaptureFixture) -> None:
     mcp = _make_server()
-    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"):
-        try:
-            await mcp.call_tool("get_status", {})
-        except Exception:
-            pass
+    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"), contextlib.suppress(Exception):
+        await mcp.call_tool("get_status", {})
 
     messages = [r.message for r in caplog.records]
     pre_call = next(m for m in messages if "status=call" in m and "tool=get_status" in m)
@@ -97,14 +92,11 @@ async def test_call_tool_logs_finish_on_success(
 
 async def test_call_tool_logs_arguments_as_json(caplog: pytest.LogCaptureFixture) -> None:
     mcp = _make_server()
-    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"):
-        # get_node_template requires a `template` arg -- it'll fail against a
-        # non-existent client/server, but the pre-call log line is written
-        # before that happens, which is what this test checks.
-        try:
-            await mcp.call_tool("get_node_template", {"template": "iol"})
-        except Exception:
-            pass
+    # get_node_template requires a `template` arg -- it'll fail against a
+    # non-existent client/server, but the pre-call log line is written
+    # before that happens, which is what this test checks.
+    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"), contextlib.suppress(Exception):
+        await mcp.call_tool("get_node_template", {"template": "iol"})
 
     messages = [r.message for r in caplog.records]
     assert any('arguments={"template": "iol"}' in m for m in messages)
@@ -112,11 +104,8 @@ async def test_call_tool_logs_arguments_as_json(caplog: pytest.LogCaptureFixture
 
 async def test_call_tool_redacts_password_argument(caplog: pytest.LogCaptureFixture) -> None:
     mcp = _make_server()
-    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"):
-        try:
-            await mcp.call_tool("add_user", {"username": "bob", "password": "hunter2"})
-        except Exception:
-            pass
+    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"), contextlib.suppress(Exception):
+        await mcp.call_tool("add_user", {"username": "bob", "password": "hunter2"})
 
     messages = [r.message for r in caplog.records]
     pre_call = next(m for m in messages if "status=call" in m and "tool=add_user" in m)
@@ -128,14 +117,11 @@ async def test_call_tool_redacts_password_argument(caplog: pytest.LogCaptureFixt
 
 async def test_call_tool_redacts_rdp_password_argument(caplog: pytest.LogCaptureFixture) -> None:
     mcp = _make_server()
-    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"):
-        try:
-            await mcp.call_tool(
-                "change_node_delay",
-                {"lab_path": "/x.unl", "node_id": 1, "rdp_password": "s3cr3t"},
-            )
-        except Exception:
-            pass
+    with caplog.at_level(logging.INFO, logger="mcp_eveng.tool_calls"), contextlib.suppress(Exception):
+        await mcp.call_tool(
+            "change_node_delay",
+            {"lab_path": "/x.unl", "node_id": 1, "rdp_password": "s3cr3t"},
+        )
 
     messages = [r.message for r in caplog.records]
     pre_call = next(m for m in messages if "status=call" in m and "tool=change_node_delay" in m)
