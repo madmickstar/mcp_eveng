@@ -2,18 +2,28 @@
 
 `mcp-eveng` and `mcp-relay` share ONE source checkout, ONE venv, and
 ONE `.env` file — not separate installs. One `git pull` + one
-`pip install` covers both; restart whichever systemd service(s) you
-run afterward.
+`pip install` covers both; stop both services first, and start them
+again once you're done.
 
 **systemd deployment (Linux):**
 
 ```bash
+sudo systemctl stop mcp-eveng.service
+sudo systemctl stop mcp-relay.service   # only if you run this too
+
 cd /opt/mcp_eveng
 sudo git pull
+sudo chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng
 sudo -u mcp-eveng /opt/mcp_eveng/.venv/bin/pip install /opt/mcp_eveng
-sudo systemctl restart mcp-eveng.service
-sudo systemctl restart mcp-relay.service   # only if you run this too
+
+sudo systemctl start mcp-eveng.service
+sudo systemctl start mcp-relay.service   # only if you run this too
 ```
+
+`sudo git pull` writes the pulled files as root, so `chown` hands
+`/opt/mcp_eveng` back to the `mcp-eveng` service account afterward —
+skip it and the next `pip install` (or the service itself) can fail
+on files it no longer owns.
 
 **Manual install (any OS):**
 

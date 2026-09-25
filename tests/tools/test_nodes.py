@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2890,3 +2891,67 @@ async def test_delete_lab_node_no_selection_still_works_for_single_match() -> No
     result = await nodes.delete_lab_node(client, "/User1/Lab 1.unl", "SW1", confirm=True)
     client.delete_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 0)
     assert result["status"] == "success"
+
+
+# -- lab_lock: real tool-level concurrency -----------------------------------
+#
+# The lower-level primitive (dependencies.lab_lock itself) is covered in
+# tests/test_dependencies.py; these two prove the wrapping actually took
+# effect on a real, complex tool function -- connect_interface -- not just
+# that the primitive works in isolation.
+
+
+async def test_connect_interface_serializes_concurrent_calls_for_the_same_lab() -> None:
+    client = _pro_client()
+    events: list[str] = []
+
+    async def get_node_interfaces(lab_path: str, node_id: int) -> dict:
+        label = "a" if node_id == 1 else "b"
+        events.append(f"{label}-start")
+        await asyncio.sleep(0.05 if label == "a" else 0.01)
+        events.append(f"{label}-end")
+        return {"status": "success", "data": {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}}
+
+    client.get_node_interfaces.side_effect = get_node_interfaces
+    client.set_node_interface.return_value = {"status": "success"}
+
+    # Node 1 and node 2 are unrelated to each other -- these calls would be
+    # perfectly safe to run concurrently on their own merits. The point is
+    # that BOTH touch the same lab, so lab_lock still serializes them.
+    await asyncio.gather(
+        nodes.connect_interface(client, "/same.unl", 1, network_id=4),
+        nodes.connect_interface(client, "/same.unl", 2, network_id=5),
+    )
+
+    # "b" is faster than "a" -- if the two calls ran unlocked, b's start
+    # (and often its end) would land between a's start and end. Serialized,
+    # one call's start+end must appear as a contiguous pair before the
+    # other's start appears at all, regardless of call order.
+    assert events in (
+        ["a-start", "a-end", "b-start", "b-end"],
+        ["b-start", "b-end", "a-start", "a-end"],
+    )
+
+
+async def test_connect_interface_does_not_serialize_different_labs() -> None:
+    client = _pro_client()
+    events: list[str] = []
+
+    async def get_node_interfaces(lab_path: str, node_id: int) -> dict:
+        label = "a" if lab_path == "/a.unl" else "b"
+        events.append(f"{label}-start")
+        await asyncio.sleep(0.05)
+        events.append(f"{label}-end")
+        return {"status": "success", "data": {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}}
+
+    client.get_node_interfaces.side_effect = get_node_interfaces
+    client.set_node_interface.return_value = {"status": "success"}
+
+    await asyncio.gather(
+        nodes.connect_interface(client, "/a.unl", 1, network_id=4),
+        nodes.connect_interface(client, "/b.unl", 1, network_id=4),
+    )
+
+    # Different labs must NOT be serialized -- both start before either
+    # finishes, the opposite of the same-lab test above.
+    assert set(events[:2]) == {"a-start", "b-start"}

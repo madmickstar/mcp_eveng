@@ -153,6 +153,50 @@ async def test_4xx_with_no_json_body_does_not_get_lock_file_message(
     assert "lock" not in str(exc_info.value).lower()
 
 
+async def test_2xx_with_unparseable_body_raises_descriptive_error(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # A successful-looking HTTP status (not >=500, so it never reaches the
+    # stale-lock-file branch above) whose body still isn't valid JSON used
+    # to make `_request` return None, and every caller's bare
+    # `assert result is not None` turned that into a blank
+    # `AssertionError()` -- `str()` of one is literally an empty string.
+    # This is the fix: a real, readable error instead.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/status",
+        status_code=200,
+        content=b"",
+    )
+
+    with pytest.raises(EvengAPIError) as exc_info:
+        await client.get_status()
+
+    message = str(exc_info.value)
+    assert message != ""
+    assert "GET" in message
+    assert "/status" in message
+
+
+async def test_logout_still_tolerates_an_empty_body(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
+    # logout is the one confirmed case where EVE-NG returning nothing back
+    # is a legitimate outcome (see client.py's logout, which deliberately
+    # bypasses `_get`'s now-strict body check for exactly this reason) --
+    # must NOT start raising just because every other GET/POST/PUT/DELETE
+    # now does.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/auth/logout",
+        status_code=200,
+        content=b"",
+    )
+
+    result = await client.logout()
+
+    assert result["status"] == "success"
+    assert client._authenticated is False
+
+
 async def test_401_triggers_relogin_and_retries(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
     # First call to /status: session expired.
     httpx_mock.add_response(

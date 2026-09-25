@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-19
+
+### Fixed
+- **Concurrent tool calls against the same lab could race and interleave.**
+  An AI agent's habit of firing several tool calls at once was harmless for
+  read-only tools, but `connect_interface`, `add_lab_node`, `edit_lab_node`,
+  `delete_lab_node`, `change_node_delay`, `edit_lab_nodes_by_template`,
+  `start_node`, `stop_node`, `wipe_node`, `add_lab_network`,
+  `edit_lab_network`, `delete_lab_network`, and `edit_lab` each do a
+  read-then-decide-then-write sequence with real `await` gaps in between --
+  two concurrent calls against the SAME lab could each read the same
+  "before" state and then both act on it (e.g. both pick the same free
+  interface, or a concurrent `start_node` undoes the "make sure it's
+  stopped first" step `edit_lab_node`/`connect_interface` had just done).
+  Added a per-lab-path `asyncio.Lock` registry (`dependencies.lab_lock`)
+  and wrapped each of the above tool functions' entire body in it -- calls
+  against the SAME lab now queue and run one at a time; calls against
+  DIFFERENT labs are completely unaffected and still run fully in
+  parallel. Verified end-to-end (not just the locking primitive in
+  isolation) that a real `connect_interface` call now serializes correctly
+  against a concurrent call on the same lab, and is confirmed to genuinely
+  interleave/race without the fix.
+- **A response body EVE-NG returned that didn't parse as JSON produced a
+  blank, message-less error.** Every `EvengClient` method that talks to
+  EVE-NG used to do `assert result is not None` and trust `_request`
+  never really returned `None` in practice; when it did (a successful-
+  looking HTTP status whose body wasn't valid JSON), `str(AssertionError())`
+  is a literal empty string -- the tool call, and anything upstream of it
+  including the AI agent using this server, saw a blank error with no
+  indication of what went wrong or which request caused it. `_get`/
+  `_post`/`_put`/`_delete` now raise a proper `EvengAPIError` naming the
+  method and path in that case, so every one of the 34 affected call
+  sites gets a real message for free instead of needing its own check;
+  `logout()` is the one confirmed legitimate case of EVE-NG returning
+  nothing back, and keeps tolerating it by calling the lower-level
+  `_request` directly instead.
+
 ## [0.8.0] - 2026-09-10
+
+### Documentation
+- **`docs/upgrading.md`'s systemd steps now stop both services before
+  `git pull`, and `chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng` back
+  right after it** -- `sudo git pull` writes the pulled files as root,
+  so without the `chown` the next `pip install` (running as the
+  `mcp-eveng` service account) or the service itself can fail on files
+  it no longer owns. Services are started again at the end instead of
+  restarted partway through.
 
 ### Fixed
 - **`wipe_node`: wiping every node in a lab is no longer the default for

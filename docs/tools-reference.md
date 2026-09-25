@@ -99,6 +99,38 @@ class of issue out entirely.
 †-marked tools are disabled by default — see "Controlling which tools are
 exposed" in the main README.
 
+## Concurrent tool calls against the same lab
+
+An AI agent's habit of firing several tool calls at once is harmless for
+read-only tools, but several mutating tools do a read-then-decide-then-write
+sequence against EVE-NG with real `await` gaps in between:
+`connect_interface` reads a node's interfaces before deciding which one is
+free and writing to it; `edit_lab_node` checks whether a node is running,
+maybe stops it, then edits it. Two concurrent calls against the SAME lab
+used to be able to each read the same "before" state and then both act on
+it — e.g. both pick the same free interface, or a concurrent `start_node`
+undoes the "make sure it's stopped first" step `edit_lab_node` had just
+done a moment earlier.
+
+`connect_interface`, `add_lab_node`, `edit_lab_node`, `delete_lab_node`,
+`change_node_delay`, `edit_lab_nodes_by_template`, `start_node`,
+`stop_node`, `wipe_node`, `add_lab_network`, `edit_lab_network`,
+`delete_lab_network`, and `edit_lab` are now serialized per lab: each call
+acquires a lock keyed on `lab_path` for its entire sequence, not just one
+HTTP request, so a concurrent call against the *same* lab genuinely queues
+behind it rather than interleaving partway through. Calls against
+*different* labs are completely unaffected and still run fully in
+parallel — only same-lab contention is serialized. From the calling
+agent's perspective, a parallel tool-call habit becomes slower-but-correct
+instead of a race: nothing fails or needs to be told to retry, the second
+call just waits its turn.
+
+This doesn't replace the "already-connected interface" confirmation check
+described above (a genuine two-conflicting-instructions case), and it
+doesn't change anything about lab-level operations like `create_lab`,
+`delete_lab`, `share_lab`, or `move_lab`, which aren't covered by this
+lock.
+
 **`add_lab_node` resolves `template` by search, not by exact id.**
 `template` is a case-insensitive substring match against every available
 template's id, name, and (best-effort) vendor — e.g. `"cisco"`,

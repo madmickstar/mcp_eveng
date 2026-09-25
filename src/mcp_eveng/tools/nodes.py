@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
+from ..dependencies import lab_lock
 from ..edition import is_pro_edition
 from ..search import find_by_name_case_insensitive, iter_named_records
 from ..vendor import extract_vendor, has_image, strip_hidden_marker
@@ -328,112 +329,113 @@ async def add_lab_node(
     time, or across many separate calls) place each new node in the next
     genuinely free slot rather than piling up on top of each other.
     """
-    candidates = await _search_templates(client, template)
-    if not candidates:
-        message = (
-            f"No template found matching {template!r}."
-            if template.strip()
-            else "No node templates with an image installed were found."
-        )
-        return {"status": "cancelled", "message": message}
+    async with lab_lock(lab_path):
+        candidates = await _search_templates(client, template)
+        if not candidates:
+            message = (
+                f"No template found matching {template!r}."
+                if template.strip()
+                else "No node templates with an image installed were found."
+            )
+            return {"status": "cancelled", "message": message}
 
-    if len(candidates) == 1:
-        resolved_template = candidates[0]["id"]
-    else:
-        labels = [_template_label(t) for t in candidates]
-        if selection.strip():
-            resolved_list, invalid = resolve_selection(selection, candidates, _template_matches_exact)
-            if invalid or not resolved_list:
+        if len(candidates) == 1:
+            resolved_template = candidates[0]["id"]
+        else:
+            labels = [_template_label(t) for t in candidates]
+            if selection.strip():
+                resolved_list, invalid = resolve_selection(selection, candidates, _template_matches_exact)
+                if invalid or not resolved_list:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Could not match {selection!r} to any current template. "
+                            f"Current matches:\n{format_numbered(labels)}"
+                        ),
+                        "data": {"matches": labels},
+                    }
+                if len(resolved_list) > 1:
+                    return {
+                        "status": "error",
+                        "message": f"Only one template can be chosen. Pick exactly one:\n{format_numbered(labels)}",
+                        "data": {"matches": labels},
+                    }
+                resolved_template = resolved_list[0]["id"]
+            else:
+                what = f"matching {template!r}" if template.strip() else "available"
                 return {
-                    "status": "error",
+                    "status": "selection_required",
                     "message": (
-                        f"Could not match {selection!r} to any current template. "
-                        f"Current matches:\n{format_numbered(labels)}"
+                        f"{len(candidates)} template(s) {what}:\n{format_numbered(labels)}\n\n"
+                        "Call add_lab_node again with `selection` set to the number or exact "
+                        "id/name of the one you want."
                     ),
                     "data": {"matches": labels},
                 }
-            if len(resolved_list) > 1:
+
+        template_result = await client.get_node_template(resolved_template)
+        template_data = template_result.get("data") or {}
+        if not isinstance(template_data, dict):
+            template_data = {}
+        options = template_data.get("options") or {}
+        if not isinstance(options, dict):
+            options = {}
+
+        resolved_image = image
+        if resolved_image is None:
+            image_names = _template_image_names(options)
+            if len(image_names) > 1:
                 return {
-                    "status": "error",
-                    "message": f"Only one template can be chosen. Pick exactly one:\n{format_numbered(labels)}",
-                    "data": {"matches": labels},
+                    "status": "selection_required",
+                    "message": (
+                        f"Template {resolved_template!r} has {len(image_names)} image(s) available:\n"
+                        f"{format_numbered(image_names)}\n\n"
+                        "Call add_lab_node again with `image` set to the one you want."
+                    ),
+                    "data": {"images": image_names},
                 }
-            resolved_template = resolved_list[0]["id"]
-        else:
-            what = f"matching {template!r}" if template.strip() else "available"
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(candidates)} template(s) {what}:\n{format_numbered(labels)}\n\n"
-                    "Call add_lab_node again with `selection` set to the number or exact "
-                    "id/name of the one you want."
-                ),
-                "data": {"matches": labels},
-            }
+            resolved_image = image_names[0] if len(image_names) == 1 else _template_option_str(options, "image")
 
-    template_result = await client.get_node_template(resolved_template)
-    template_data = template_result.get("data") or {}
-    if not isinstance(template_data, dict):
-        template_data = {}
-    options = template_data.get("options") or {}
-    if not isinstance(options, dict):
-        options = {}
+        resolved_node_type = node_type or str(template_data.get("type") or "qemu")
+        resolved_name = name or _template_option_str(options, "name")
+        resolved_console = console or _template_option_str(options, "console") or "telnet"
+        resolved_icon = _template_option_str(options, "icon") or "Router.png"
+        resolved_ram = ram if ram is not None else _template_option_int(options, "ram")
+        resolved_cpu = cpu if cpu is not None else (_template_option_int(options, "cpu") or 1)
+        resolved_ethernet = ethernet if ethernet is not None else _template_option_int(options, "ethernet")
 
-    resolved_image = image
-    if resolved_image is None:
-        image_names = _template_image_names(options)
-        if len(image_names) > 1:
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"Template {resolved_template!r} has {len(image_names)} image(s) available:\n"
-                    f"{format_numbered(image_names)}\n\n"
-                    "Call add_lab_node again with `image` set to the one you want."
-                ),
-                "data": {"images": image_names},
-            }
-        resolved_image = image_names[0] if len(image_names) == 1 else _template_option_str(options, "image")
+        resolved_extra = _template_extra_options(options)
 
-    resolved_node_type = node_type or str(template_data.get("type") or "qemu")
-    resolved_name = name or _template_option_str(options, "name")
-    resolved_console = console or _template_option_str(options, "console") or "telnet"
-    resolved_icon = _template_option_str(options, "icon") or "Router.png"
-    resolved_ram = ram if ram is not None else _template_option_int(options, "ram")
-    resolved_cpu = cpu if cpu is not None else (_template_option_int(options, "cpu") or 1)
-    resolved_ethernet = ethernet if ethernet is not None else _template_option_int(options, "ethernet")
+        # EVE-NG's own node-creation endpoint requires "left"/"top" to always
+        # be present in the payload (see EvengClient.add_lab_node for why) --
+        # never forward a bare None here, or it overrides that client-side
+        # default with an explicit null. When the caller didn't give an
+        # explicit position, auto-place instead of just defaulting to "0","0".
+        resolved_left = left
+        resolved_top = top
+        if resolved_left is None or resolved_top is None:
+            auto_left, auto_top = await _next_free_position(client, lab_path)
+            if resolved_left is None:
+                resolved_left = auto_left
+            if resolved_top is None:
+                resolved_top = auto_top
 
-    resolved_extra = _template_extra_options(options)
-
-    # EVE-NG's own node-creation endpoint requires "left"/"top" to always
-    # be present in the payload (see EvengClient.add_lab_node for why) --
-    # never forward a bare None here, or it overrides that client-side
-    # default with an explicit null. When the caller didn't give an
-    # explicit position, auto-place instead of just defaulting to "0","0".
-    resolved_left = left
-    resolved_top = top
-    if resolved_left is None or resolved_top is None:
-        auto_left, auto_top = await _next_free_position(client, lab_path)
-        if resolved_left is None:
-            resolved_left = auto_left
-        if resolved_top is None:
-            resolved_top = auto_top
-
-    return await client.add_lab_node(
-        lab_path,
-        node_type=resolved_node_type,
-        template=resolved_template,
-        name=resolved_name,
-        image=resolved_image,
-        config=config,
-        icon=resolved_icon,
-        left=resolved_left,
-        top=resolved_top,
-        ram=resolved_ram,
-        console=resolved_console,
-        cpu=resolved_cpu,
-        ethernet=resolved_ethernet,
-        extra=resolved_extra,
-    )
+        return await client.add_lab_node(
+            lab_path,
+            node_type=resolved_node_type,
+            template=resolved_template,
+            name=resolved_name,
+            image=resolved_image,
+            config=config,
+            icon=resolved_icon,
+            left=resolved_left,
+            top=resolved_top,
+            ram=resolved_ram,
+            console=resolved_console,
+            cpu=resolved_cpu,
+            ethernet=resolved_ethernet,
+            extra=resolved_extra,
+        )
 
 
 def _node_id(node: dict[str, Any]) -> int:
@@ -482,29 +484,30 @@ async def delete_lab_node(
     Each candidate is shown with a best-effort vendor label, e.g.
     "canvas-14 [Juniper] (id 21)", for context -- see `vendor.extract_vendor`.
     """
-    if not name or not name.strip():
-        return {
-            "status": "error",
-            "message": "A node name is required to delete a node; none was supplied.",
-        }
+    async with lab_lock(lab_path):
+        if not name or not name.strip():
+            return {
+                "status": "error",
+                "message": "A node name is required to delete a node; none was supplied.",
+            }
 
-    candidates = await _find_nodes_by_name(client, lab_path, name)
-    vendor_map = await _template_vendor_map(client)
+        candidates = await _find_nodes_by_name(client, lab_path, name)
+        vendor_map = await _template_vendor_map(client)
 
-    async def _perform_delete(node: dict[str, Any]) -> str | None:
-        await client.delete_lab_node(lab_path, _node_id(node))
-        return None
+        async def _perform_delete(node: dict[str, Any]) -> str | None:
+            await client.delete_lab_node(lab_path, _node_id(node))
+            return None
 
-    return await run_delete_flow(
-        candidates,
-        matches_exact=lambda n, needle: _node_name(n).strip().lower() == needle,
-        describe=lambda n: _node_label(n, vendor_map),
-        noun="node",
-        selection=selection,
-        confirm=confirm,
-        allow_multiple=True,
-        perform_delete=_perform_delete,
-    )
+        return await run_delete_flow(
+            candidates,
+            matches_exact=lambda n, needle: _node_name(n).strip().lower() == needle,
+            describe=lambda n: _node_label(n, vendor_map),
+            noun="node",
+            selection=selection,
+            confirm=confirm,
+            allow_multiple=True,
+            perform_delete=_perform_delete,
+        )
 
 
 # -- EVE-NG Community bug workaround: a delay-only edit is silently -----
@@ -634,78 +637,79 @@ async def edit_lab_node(
     naming the conflicting node; call again with either a different `name`,
     or the same `name` plus `confirm_duplicate_name=True` to use it anyway.
     """
-    fields = {
-        k: v
-        for k, v in {
-            "name": name,
-            "icon": icon,
-            "image": image,
-            "ram": ram,
-            "cpu": cpu,
-            "cpulimit": cpulimit,
-            "ethernet": ethernet,
-            "console": console,
-            "config": config,
-            "left": left,
-            "top": top,
-            "delay": delay,
-            "disable_offload": disable_offload,
-            "sat": sat,
-            "eth_format": eth_format,
-            "eth_name": eth_name,
-            "firstmac": firstmac,
-            "qemu_version": qemu_version,
-            "qemu_arch": qemu_arch,
-            "qemu_nic": qemu_nic,
-            "qemu_options": qemu_options,
-            "rdp_user": rdp_user,
-            "rdp_password": rdp_password,
-        }.items()
-        if v is not None
-    }
-    if not fields:
-        return {
-            "status": "error",
-            "message": "At least one field to change is required; none was supplied.",
+    async with lab_lock(lab_path):
+        fields = {
+            k: v
+            for k, v in {
+                "name": name,
+                "icon": icon,
+                "image": image,
+                "ram": ram,
+                "cpu": cpu,
+                "cpulimit": cpulimit,
+                "ethernet": ethernet,
+                "console": console,
+                "config": config,
+                "left": left,
+                "top": top,
+                "delay": delay,
+                "disable_offload": disable_offload,
+                "sat": sat,
+                "eth_format": eth_format,
+                "eth_name": eth_name,
+                "firstmac": firstmac,
+                "qemu_version": qemu_version,
+                "qemu_arch": qemu_arch,
+                "qemu_nic": qemu_nic,
+                "qemu_options": qemu_options,
+                "rdp_user": rdp_user,
+                "rdp_password": rdp_password,
+            }.items()
+            if v is not None
         }
-
-    if name is not None and not confirm_duplicate_name:
-        duplicate = await _find_duplicate_name(client, lab_path, node_id, name)
-        if duplicate is not None:
+        if not fields:
             return {
-                "status": "confirmation_required",
-                "message": (
-                    f"{name!r} is already used by node {duplicate['name']!r} "
-                    f"(id {duplicate['id']}). EVE-NG allows duplicate node names, so this "
-                    "isn't blocked -- call again with confirm_duplicate_name=true to use "
-                    "this name anyway, or supply a different name instead."
-                ),
-                "data": {
-                    "duplicate_node_id": duplicate["id"],
-                    "duplicate_node_name": duplicate["name"],
-                },
+                "status": "error",
+                "message": "At least one field to change is required; none was supplied.",
             }
 
-    current = await client.list_lab_nodes(lab_path, node_id)
-    current_data = current.get("data") or {}
-    if not isinstance(current_data, dict):
-        current_data = {}
-    node_label = str(current_data.get("name", f"id {node_id}"))
+        if name is not None and not confirm_duplicate_name:
+            duplicate = await _find_duplicate_name(client, lab_path, node_id, name)
+            if duplicate is not None:
+                return {
+                    "status": "confirmation_required",
+                    "message": (
+                        f"{name!r} is already used by node {duplicate['name']!r} "
+                        f"(id {duplicate['id']}). EVE-NG allows duplicate node names, so this "
+                        "isn't blocked -- call again with confirm_duplicate_name=true to use "
+                        "this name anyway, or supply a different name instead."
+                    ),
+                    "data": {
+                        "duplicate_node_id": duplicate["id"],
+                        "duplicate_node_name": duplicate["name"],
+                    },
+                }
 
-    stopped_first = False
-    if _is_running(current_data):
-        await client.stop_node(lab_path, node_id)
-        stopped_first = True
+        current = await client.list_lab_nodes(lab_path, node_id)
+        current_data = current.get("data") or {}
+        if not isinstance(current_data, dict):
+            current_data = {}
+        node_label = str(current_data.get("name", f"id {node_id}"))
 
-    api_fields = _with_delay_workaround(fields, current_data)
-    await client.edit_lab_node(lab_path, node_id, **api_fields)
+        stopped_first = False
+        if _is_running(current_data):
+            await client.stop_node(lab_path, node_id)
+            stopped_first = True
 
-    changed = ", ".join(f"{k}={v!r}" for k, v in fields.items())
-    note = " (it was running, so stopped it first)" if stopped_first else ""
-    return {
-        "status": "success",
-        "message": f"Updated node {node_label!r} (id {node_id}){note}: {changed}.",
-    }
+        api_fields = _with_delay_workaround(fields, current_data)
+        await client.edit_lab_node(lab_path, node_id, **api_fields)
+
+        changed = ", ".join(f"{k}={v!r}" for k, v in fields.items())
+        note = " (it was running, so stopped it first)" if stopped_first else ""
+        return {
+            "status": "success",
+            "message": f"Updated node {node_label!r} (id {node_id}){note}: {changed}.",
+        }
 
 
 # -- change_node_delay: single-node or bulk (name-matched or user-ordered) ----
@@ -786,140 +790,141 @@ async def change_node_delay(
     same wording as every delete tool, kept consistent; anything else
     cancels. Nothing is stopped or changed before that.
     """
-    name_list = [names] if isinstance(names, str) else list(names)
-    name_list = [n for n in name_list if n.strip()]
+    async with lab_lock(lab_path):
+        name_list = [names] if isinstance(names, str) else list(names)
+        name_list = [n for n in name_list if n.strip()]
 
-    if node_id is not None:
-        resolved_delay = delay if delay is not None else _DEFAULT_DELAY
-        current = await client.list_lab_nodes(lab_path, node_id)
-        current_data = current.get("data") or {}
-        if not isinstance(current_data, dict):
-            current_data = {}
-        node_name = str(current_data.get("name", f"id {node_id}"))
-        current_delay = current_data.get("delay", "?")
+        if node_id is not None:
+            resolved_delay = delay if delay is not None else _DEFAULT_DELAY
+            current = await client.list_lab_nodes(lab_path, node_id)
+            current_data = current.get("data") or {}
+            if not isinstance(current_data, dict):
+                current_data = {}
+            node_name = str(current_data.get("name", f"id {node_id}"))
+            current_delay = current_data.get("delay", "?")
+
+            if not confirm:
+                return {
+                    "status": "confirmation_required",
+                    "message": (
+                        f"Node {node_name!r} (id {node_id}): delay {current_delay}s -> "
+                        f"{resolved_delay}s. It will be stopped first to make this change. "
+                        "Reply 'accept' or 'yes' to proceed; anything else cancels."
+                    ),
+                }
+
+            if _is_running(current_data):
+                await client.stop_node(lab_path, node_id)
+            api_fields = _with_delay_workaround({"delay": resolved_delay}, current_data)
+            await client.edit_lab_node(lab_path, node_id, **api_fields)
+            return {
+                "status": "success",
+                "message": f"Set delay to {resolved_delay}s on node {node_name!r} (id {node_id}).",
+            }
+
+        if not bulk:
+            return {
+                "status": "error",
+                "message": "Either node_id (single node) or bulk=true (multiple nodes) is required.",
+            }
+
+        resolved_increment = increment if increment is not None else _DEFAULT_DELAY_INCREMENT
+
+        if name_list:
+            ordered_targets: list[dict[str, Any]] = []
+            seen_ids: set[int] = set()
+            unmatched: list[str] = []
+            for term in name_list:
+                matches = await _search_nodes_by_name(client, lab_path, term)
+                if not matches:
+                    unmatched.append(term)
+                    continue
+                for node in matches:
+                    node_key = _delay_node_id(node)
+                    if node_key not in seen_ids:
+                        seen_ids.add(node_key)
+                        ordered_targets.append(node)
+
+            if not ordered_targets:
+                return {
+                    "status": "cancelled",
+                    "message": f"No node found matching any of: {', '.join(name_list)}.",
+                }
+        else:
+            result = await client.list_lab_nodes(lab_path)
+            data = result.get("data") or {}
+            all_nodes = sorted(
+                (node for _key, node in iter_named_records(data, "name")),
+                key=_delay_node_id,
+            )
+
+            if not all_nodes:
+                return {"status": "cancelled", "message": "No nodes found in this lab."}
+
+            if not order.strip():
+                labels = [_delay_node_label(n) for n in all_nodes]
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(all_nodes)} node(s) in this lab:\n{format_numbered(labels)}\n\n"
+                        "Reply with `order` set to the numbers above, listed in the sequence "
+                        'you want increasing delays applied (e.g. "3,1,2") -- the first '
+                        f"number gets delay {resolved_increment}s, the second "
+                        f"{resolved_increment * 2}s, and so on."
+                    ),
+                    "data": {"matches": labels},
+                }
+
+            tokens = [t.strip() for t in order.replace(",", " ").split() if t.strip()]
+            ordered_targets = []
+            for token in tokens:
+                if not token.isdigit():
+                    return {"status": "error", "message": f"{token!r} in `order` is not a number."}
+                idx = int(token)
+                if not (1 <= idx <= len(all_nodes)):
+                    return {
+                        "status": "error",
+                        "message": f"{idx} in `order` is out of range (1-{len(all_nodes)}).",
+                    }
+                ordered_targets.append(all_nodes[idx - 1])
+
+            if not ordered_targets:
+                return {"status": "error", "message": "`order` didn't resolve to any nodes."}
+
+        assignments = [(node, resolved_increment * (position + 1)) for position, node in enumerate(ordered_targets)]
 
         if not confirm:
+            labels = [
+                f"{node.get('name', '?')} (id {_delay_node_id(node)}): {node.get('delay', '?')}s -> {new_delay}s"
+                for node, new_delay in assignments
+            ]
+            plural = "s" if len(assignments) != 1 else ""
             return {
                 "status": "confirmation_required",
                 "message": (
-                    f"Node {node_name!r} (id {node_id}): delay {current_delay}s -> "
-                    f"{resolved_delay}s. It will be stopped first to make this change. "
+                    f"{len(assignments)} node{plural} will have their delay changed:\n"
+                    f"{format_numbered(labels)}\n\n"
+                    "Every affected node will be stopped first to make this change. "
                     "Reply 'accept' or 'yes' to proceed; anything else cancels."
-                ),
-            }
-
-        if _is_running(current_data):
-            await client.stop_node(lab_path, node_id)
-        api_fields = _with_delay_workaround({"delay": resolved_delay}, current_data)
-        await client.edit_lab_node(lab_path, node_id, **api_fields)
-        return {
-            "status": "success",
-            "message": f"Set delay to {resolved_delay}s on node {node_name!r} (id {node_id}).",
-        }
-
-    if not bulk:
-        return {
-            "status": "error",
-            "message": "Either node_id (single node) or bulk=true (multiple nodes) is required.",
-        }
-
-    resolved_increment = increment if increment is not None else _DEFAULT_DELAY_INCREMENT
-
-    if name_list:
-        ordered_targets: list[dict[str, Any]] = []
-        seen_ids: set[int] = set()
-        unmatched: list[str] = []
-        for term in name_list:
-            matches = await _search_nodes_by_name(client, lab_path, term)
-            if not matches:
-                unmatched.append(term)
-                continue
-            for node in matches:
-                node_key = _delay_node_id(node)
-                if node_key not in seen_ids:
-                    seen_ids.add(node_key)
-                    ordered_targets.append(node)
-
-        if not ordered_targets:
-            return {
-                "status": "cancelled",
-                "message": f"No node found matching any of: {', '.join(name_list)}.",
-            }
-    else:
-        result = await client.list_lab_nodes(lab_path)
-        data = result.get("data") or {}
-        all_nodes = sorted(
-            (node for _key, node in iter_named_records(data, "name")),
-            key=_delay_node_id,
-        )
-
-        if not all_nodes:
-            return {"status": "cancelled", "message": "No nodes found in this lab."}
-
-        if not order.strip():
-            labels = [_delay_node_label(n) for n in all_nodes]
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(all_nodes)} node(s) in this lab:\n{format_numbered(labels)}\n\n"
-                    "Reply with `order` set to the numbers above, listed in the sequence "
-                    'you want increasing delays applied (e.g. "3,1,2") -- the first '
-                    f"number gets delay {resolved_increment}s, the second "
-                    f"{resolved_increment * 2}s, and so on."
                 ),
                 "data": {"matches": labels},
             }
 
-        tokens = [t.strip() for t in order.replace(",", " ").split() if t.strip()]
-        ordered_targets = []
-        for token in tokens:
-            if not token.isdigit():
-                return {"status": "error", "message": f"{token!r} in `order` is not a number."}
-            idx = int(token)
-            if not (1 <= idx <= len(all_nodes)):
-                return {
-                    "status": "error",
-                    "message": f"{idx} in `order` is out of range (1-{len(all_nodes)}).",
-                }
-            ordered_targets.append(all_nodes[idx - 1])
+        updated: list[str] = []
+        for node, new_delay in assignments:
+            target_id = _delay_node_id(node)
+            node_name = str(node.get("name", f"id {target_id}"))
+            if _is_running(node):
+                await client.stop_node(lab_path, target_id)
+            api_fields = _with_delay_workaround({"delay": new_delay}, node)
+            await client.edit_lab_node(lab_path, target_id, **api_fields)
+            updated.append(f"{node_name} ({new_delay}s)")
 
-        if not ordered_targets:
-            return {"status": "error", "message": "`order` didn't resolve to any nodes."}
-
-    assignments = [(node, resolved_increment * (position + 1)) for position, node in enumerate(ordered_targets)]
-
-    if not confirm:
-        labels = [
-            f"{node.get('name', '?')} (id {_delay_node_id(node)}): {node.get('delay', '?')}s -> {new_delay}s"
-            for node, new_delay in assignments
-        ]
-        plural = "s" if len(assignments) != 1 else ""
+        plural = "s" if len(updated) != 1 else ""
         return {
-            "status": "confirmation_required",
-            "message": (
-                f"{len(assignments)} node{plural} will have their delay changed:\n"
-                f"{format_numbered(labels)}\n\n"
-                "Every affected node will be stopped first to make this change. "
-                "Reply 'accept' or 'yes' to proceed; anything else cancels."
-            ),
-            "data": {"matches": labels},
+            "status": "success",
+            "message": f"Updated delay on {len(updated)} node{plural}: {', '.join(updated)}.",
         }
-
-    updated: list[str] = []
-    for node, new_delay in assignments:
-        target_id = _delay_node_id(node)
-        node_name = str(node.get("name", f"id {target_id}"))
-        if _is_running(node):
-            await client.stop_node(lab_path, target_id)
-        api_fields = _with_delay_workaround({"delay": new_delay}, node)
-        await client.edit_lab_node(lab_path, target_id, **api_fields)
-        updated.append(f"{node_name} ({new_delay}s)")
-
-    plural = "s" if len(updated) != 1 else ""
-    return {
-        "status": "success",
-        "message": f"Updated delay on {len(updated)} node{plural}: {', '.join(updated)}.",
-    }
 
 
 # -- edit_lab_nodes_by_template: bulk interfaces/cpu/memory/icon edits, ------
@@ -1084,274 +1089,275 @@ async def edit_lab_nodes_by_template(
     (`confirm`) to apply; anything else cancels. Nothing is changed until
     that confirmation.
     """
-    if not vendor.strip() and not template.strip():
-        return {
-            "status": "error",
-            "message": (
-                "At least a vendor or a template name/fragment is required to start "
-                '(e.g. vendor="cisco" or template="vios").'
-            ),
-        }
-
-    by_template = await _search_existing_nodes_by_vendor_template(client, lab_path, vendor, template)
-    if not by_template:
-        return {
-            "status": "cancelled",
-            "message": (f"No node found matching vendor={vendor!r} template={template!r}."),
-        }
-
-    template_ids = sorted(by_template)
-
-    if len(template_ids) == 1:
-        resolved_template_id = template_ids[0]
-    else:
-        template_candidates = [{"id": tid} for tid in template_ids]
-        labels = [_template_choice_label(tid, by_template[tid]) for tid in template_ids]
-
-        if template_selection.strip():
-            resolved, invalid = resolve_selection(
-                template_selection,
-                template_candidates,
-                lambda c, needle: c["id"].strip().lower() == needle,
-            )
-            if invalid or not resolved:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Could not match {template_selection!r} to any current template. "
-                        f"Current matches:\n{format_numbered(labels)}"
-                    ),
-                    "data": {"matches": labels},
-                }
-            if len(resolved) > 1:
-                return {
-                    "status": "error",
-                    "message": (
-                        "Only one template can be targeted per call. Narrow further -- "
-                        f"pick exactly one:\n{format_numbered(labels)}"
-                    ),
-                    "data": {"matches": labels},
-                }
-            resolved_template_id = resolved[0]["id"]
-        else:
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(template_ids)} templates match vendor={vendor!r} "
-                    f"template={template!r}:\n{format_numbered(labels)}\n\n"
-                    "This only ever targets one template at a time. Narrow further by "
-                    "replying with a more specific vendor/template, or "
-                    "`template_selection` set to the number or exact template id of "
-                    "the one you want."
-                ),
-                "data": {"matches": labels},
-            }
-
-    template_nodes = by_template[resolved_template_id]
-    node_labels = [_bulk_node_label(n) for n in template_nodes]
-
-    if not node_selection.strip():
-        return {
-            "status": "selection_required",
-            "message": (
-                f"Template {resolved_template_id!r} has {len(template_nodes)} node(s):\n"
-                f"{format_numbered(node_labels)}\n\n"
-                'Reply with `node_selection` set to "all", or the number(s)/exact '
-                "name(s) (space/comma separated) of the ones you want."
-            ),
-            "data": {"matches": node_labels},
-        }
-
-    if node_selection.strip().lower() == "all":
-        target_nodes = template_nodes
-    else:
-        resolved_nodes, invalid = resolve_selection(
-            node_selection,
-            template_nodes,
-            lambda n, needle: str(n.get("name", "")).strip().lower() == needle,
-        )
-        if invalid or not resolved_nodes:
+    async with lab_lock(lab_path):
+        if not vendor.strip() and not template.strip():
             return {
                 "status": "error",
                 "message": (
-                    f"Could not match {node_selection!r} to any current node. Current "
-                    f"nodes for {resolved_template_id!r}:\n{format_numbered(node_labels)}"
+                    "At least a vendor or a template name/fragment is required to start "
+                    '(e.g. vendor="cisco" or template="vios").'
+                ),
+            }
+
+        by_template = await _search_existing_nodes_by_vendor_template(client, lab_path, vendor, template)
+        if not by_template:
+            return {
+                "status": "cancelled",
+                "message": (f"No node found matching vendor={vendor!r} template={template!r}."),
+            }
+
+        template_ids = sorted(by_template)
+
+        if len(template_ids) == 1:
+            resolved_template_id = template_ids[0]
+        else:
+            template_candidates = [{"id": tid} for tid in template_ids]
+            labels = [_template_choice_label(tid, by_template[tid]) for tid in template_ids]
+
+            if template_selection.strip():
+                resolved, invalid = resolve_selection(
+                    template_selection,
+                    template_candidates,
+                    lambda c, needle: c["id"].strip().lower() == needle,
+                )
+                if invalid or not resolved:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Could not match {template_selection!r} to any current template. "
+                            f"Current matches:\n{format_numbered(labels)}"
+                        ),
+                        "data": {"matches": labels},
+                    }
+                if len(resolved) > 1:
+                    return {
+                        "status": "error",
+                        "message": (
+                            "Only one template can be targeted per call. Narrow further -- "
+                            f"pick exactly one:\n{format_numbered(labels)}"
+                        ),
+                        "data": {"matches": labels},
+                    }
+                resolved_template_id = resolved[0]["id"]
+            else:
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(template_ids)} templates match vendor={vendor!r} "
+                        f"template={template!r}:\n{format_numbered(labels)}\n\n"
+                        "This only ever targets one template at a time. Narrow further by "
+                        "replying with a more specific vendor/template, or "
+                        "`template_selection` set to the number or exact template id of "
+                        "the one you want."
+                    ),
+                    "data": {"matches": labels},
+                }
+
+        template_nodes = by_template[resolved_template_id]
+        node_labels = [_bulk_node_label(n) for n in template_nodes]
+
+        if not node_selection.strip():
+            return {
+                "status": "selection_required",
+                "message": (
+                    f"Template {resolved_template_id!r} has {len(template_nodes)} node(s):\n"
+                    f"{format_numbered(node_labels)}\n\n"
+                    'Reply with `node_selection` set to "all", or the number(s)/exact '
+                    "name(s) (space/comma separated) of the ones you want."
                 ),
                 "data": {"matches": node_labels},
             }
-        target_nodes = resolved_nodes
 
-    target_labels = [_bulk_node_label(n) for n in target_nodes]
-
-    if not component:
-        return {
-            "status": "selection_required",
-            "message": (
-                f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}:\n"
-                f"{format_numbered(target_labels)}\n\n"
-                f"What do you want to change? Reply with `component`: {_COMPONENT_CHOICES}."
-            ),
-            "data": {"matches": target_labels},
-        }
-
-    normalized_component = _COMPONENT_ALIASES.get(component.strip().lower())
-    if normalized_component is None:
-        return {
-            "status": "error",
-            "message": f"Unrecognized component {component!r}. Must be one of: {_COMPONENT_CHOICES}.",
-        }
-
-    resolved_icon: str | None = None
-    if normalized_component == "icon":
-        if not icon_search.strip():
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
-                    "changing icon.\n\nWhat icon are you looking for? Reply with "
-                    "`icon_search` -- a fragment of the icon filename is enough."
-                ),
-                "data": {"matches": target_labels},
-            }
-        icon_matches = await _search_icons(client, icon_search)
-        if not icon_matches:
-            return {
-                "status": "cancelled",
-                "message": f"No icon found matching {icon_search!r}.",
-            }
-        if len(icon_matches) == 1:
-            resolved_icon = icon_matches[0]
-        elif icon_selection.strip():
-            needle = icon_selection.strip().lower()
-            if icon_selection.strip().isdigit():
-                idx = int(icon_selection.strip())
-                if 1 <= idx <= len(icon_matches):
-                    resolved_icon = icon_matches[idx - 1]
-            if resolved_icon is None:
-                exact = [i for i in icon_matches if i.lower() == needle]
-                if len(exact) == 1:
-                    resolved_icon = exact[0]
-            if resolved_icon is None:
+        if node_selection.strip().lower() == "all":
+            target_nodes = template_nodes
+        else:
+            resolved_nodes, invalid = resolve_selection(
+                node_selection,
+                template_nodes,
+                lambda n, needle: str(n.get("name", "")).strip().lower() == needle,
+            )
+            if invalid or not resolved_nodes:
                 return {
                     "status": "error",
                     "message": (
-                        f"Could not match {icon_selection!r} to any current icon. Current "
-                        f"matches:\n{format_numbered(icon_matches)}"
+                        f"Could not match {node_selection!r} to any current node. Current "
+                        f"nodes for {resolved_template_id!r}:\n{format_numbered(node_labels)}"
+                    ),
+                    "data": {"matches": node_labels},
+                }
+            target_nodes = resolved_nodes
+
+        target_labels = [_bulk_node_label(n) for n in target_nodes]
+
+        if not component:
+            return {
+                "status": "selection_required",
+                "message": (
+                    f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}:\n"
+                    f"{format_numbered(target_labels)}\n\n"
+                    f"What do you want to change? Reply with `component`: {_COMPONENT_CHOICES}."
+                ),
+                "data": {"matches": target_labels},
+            }
+
+        normalized_component = _COMPONENT_ALIASES.get(component.strip().lower())
+        if normalized_component is None:
+            return {
+                "status": "error",
+                "message": f"Unrecognized component {component!r}. Must be one of: {_COMPONENT_CHOICES}.",
+            }
+
+        resolved_icon: str | None = None
+        if normalized_component == "icon":
+            if not icon_search.strip():
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
+                        "changing icon.\n\nWhat icon are you looking for? Reply with "
+                        "`icon_search` -- a fragment of the icon filename is enough."
+                    ),
+                    "data": {"matches": target_labels},
+                }
+            icon_matches = await _search_icons(client, icon_search)
+            if not icon_matches:
+                return {
+                    "status": "cancelled",
+                    "message": f"No icon found matching {icon_search!r}.",
+                }
+            if len(icon_matches) == 1:
+                resolved_icon = icon_matches[0]
+            elif icon_selection.strip():
+                needle = icon_selection.strip().lower()
+                if icon_selection.strip().isdigit():
+                    idx = int(icon_selection.strip())
+                    if 1 <= idx <= len(icon_matches):
+                        resolved_icon = icon_matches[idx - 1]
+                if resolved_icon is None:
+                    exact = [i for i in icon_matches if i.lower() == needle]
+                    if len(exact) == 1:
+                        resolved_icon = exact[0]
+                if resolved_icon is None:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Could not match {icon_selection!r} to any current icon. Current "
+                            f"matches:\n{format_numbered(icon_matches)}"
+                        ),
+                        "data": {"matches": icon_matches},
+                    }
+            else:
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(icon_matches)} icons match {icon_search!r}:\n"
+                        f"{format_numbered(icon_matches)}\n\n"
+                        "Reply with `icon_selection` set to the number or exact filename of "
+                        "the one you want."
                     ),
                     "data": {"matches": icon_matches},
                 }
-        else:
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(icon_matches)} icons match {icon_search!r}:\n"
-                    f"{format_numbered(icon_matches)}\n\n"
-                    "Reply with `icon_selection` set to the number or exact filename of "
-                    "the one you want."
-                ),
-                "data": {"matches": icon_matches},
-            }
-        change_value_label = resolved_icon
-        fields: dict[str, Any] = {"icon": resolved_icon}
-    elif normalized_component == "image":
-        resolved_image: str | None = None
-        if not image_search.strip():
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
-                    "changing image.\n\nWhat image are you looking for? Reply with "
-                    "`image_search` -- a fragment of the image filename is enough "
-                    "(only images valid for this template are searched)."
-                ),
-                "data": {"matches": target_labels},
-            }
-        image_matches = await _search_template_images(client, resolved_template_id, image_search)
-        if not image_matches:
-            return {
-                "status": "cancelled",
-                "message": (f"No image found matching {image_search!r} for template {resolved_template_id!r}."),
-            }
-        if len(image_matches) == 1:
-            resolved_image = image_matches[0]
-        elif image_selection.strip():
-            needle = image_selection.strip().lower()
-            if image_selection.strip().isdigit():
-                idx = int(image_selection.strip())
-                if 1 <= idx <= len(image_matches):
-                    resolved_image = image_matches[idx - 1]
-            if resolved_image is None:
-                exact = [i for i in image_matches if i.lower() == needle]
-                if len(exact) == 1:
-                    resolved_image = exact[0]
-            if resolved_image is None:
+            change_value_label = resolved_icon
+            fields: dict[str, Any] = {"icon": resolved_icon}
+        elif normalized_component == "image":
+            resolved_image: str | None = None
+            if not image_search.strip():
                 return {
-                    "status": "error",
+                    "status": "selection_required",
                     "message": (
-                        f"Could not match {image_selection!r} to any current image. "
-                        f"Current matches:\n{format_numbered(image_matches)}"
+                        f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
+                        "changing image.\n\nWhat image are you looking for? Reply with "
+                        "`image_search` -- a fragment of the image filename is enough "
+                        "(only images valid for this template are searched)."
+                    ),
+                    "data": {"matches": target_labels},
+                }
+            image_matches = await _search_template_images(client, resolved_template_id, image_search)
+            if not image_matches:
+                return {
+                    "status": "cancelled",
+                    "message": (f"No image found matching {image_search!r} for template {resolved_template_id!r}."),
+                }
+            if len(image_matches) == 1:
+                resolved_image = image_matches[0]
+            elif image_selection.strip():
+                needle = image_selection.strip().lower()
+                if image_selection.strip().isdigit():
+                    idx = int(image_selection.strip())
+                    if 1 <= idx <= len(image_matches):
+                        resolved_image = image_matches[idx - 1]
+                if resolved_image is None:
+                    exact = [i for i in image_matches if i.lower() == needle]
+                    if len(exact) == 1:
+                        resolved_image = exact[0]
+                if resolved_image is None:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Could not match {image_selection!r} to any current image. "
+                            f"Current matches:\n{format_numbered(image_matches)}"
+                        ),
+                        "data": {"matches": image_matches},
+                    }
+            else:
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(image_matches)} images match {image_search!r} for template "
+                        f"{resolved_template_id!r}:\n{format_numbered(image_matches)}\n\n"
+                        "Reply with `image_selection` set to the number or exact filename "
+                        "of the one you want."
                     ),
                     "data": {"matches": image_matches},
                 }
+            change_value_label = resolved_image
+            fields = {"image": resolved_image}
         else:
+            if value is None:
+                return {
+                    "status": "selection_required",
+                    "message": (
+                        f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
+                        f"changing {normalized_component}.\n\nWhat value do you want to set "
+                        f"it to? Reply with `value` (a number)."
+                    ),
+                    "data": {"matches": target_labels},
+                }
+            change_value_label = str(value)
+            fields = {normalized_component: value}
+
+        if not confirm:
+            plural = "s" if len(target_nodes) != 1 else ""
             return {
-                "status": "selection_required",
+                "status": "confirmation_required",
                 "message": (
-                    f"{len(image_matches)} images match {image_search!r} for template "
-                    f"{resolved_template_id!r}:\n{format_numbered(image_matches)}\n\n"
-                    "Reply with `image_selection` set to the number or exact filename "
-                    "of the one you want."
-                ),
-                "data": {"matches": image_matches},
-            }
-        change_value_label = resolved_image
-        fields = {"image": resolved_image}
-    else:
-        if value is None:
-            return {
-                "status": "selection_required",
-                "message": (
-                    f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
-                    f"changing {normalized_component}.\n\nWhat value do you want to set "
-                    f"it to? Reply with `value` (a number)."
+                    f"{len(target_nodes)} node{plural} using template {resolved_template_id!r} "
+                    f"will have {normalized_component} changed to {change_value_label!r}:\n"
+                    f"{format_numbered(target_labels)}\n\n"
+                    "Every affected node will be stopped first to make this change "
+                    "(required regardless of PRO/Community). Reply 'accept' or 'yes' to "
+                    "proceed; anything else cancels."
                 ),
                 "data": {"matches": target_labels},
             }
-        change_value_label = str(value)
-        fields = {normalized_component: value}
 
-    if not confirm:
-        plural = "s" if len(target_nodes) != 1 else ""
+        updated: list[str] = []
+        for node in target_nodes:
+            target_id = _node_id(node)
+            node_name = str(node.get("name", f"id {target_id}"))
+            if _is_running(node):
+                await client.stop_node(lab_path, target_id)
+            await client.edit_lab_node(lab_path, target_id, **fields)
+            updated.append(node_name)
+
+        plural = "s" if len(updated) != 1 else ""
         return {
-            "status": "confirmation_required",
+            "status": "success",
             "message": (
-                f"{len(target_nodes)} node{plural} using template {resolved_template_id!r} "
-                f"will have {normalized_component} changed to {change_value_label!r}:\n"
-                f"{format_numbered(target_labels)}\n\n"
-                "Every affected node will be stopped first to make this change "
-                "(required regardless of PRO/Community). Reply 'accept' or 'yes' to "
-                "proceed; anything else cancels."
+                f"Updated {len(updated)} node{plural} using template {resolved_template_id!r} "
+                f"({normalized_component}={change_value_label!r}): {', '.join(updated)}."
             ),
-            "data": {"matches": target_labels},
         }
-
-    updated: list[str] = []
-    for node in target_nodes:
-        target_id = _node_id(node)
-        node_name = str(node.get("name", f"id {target_id}"))
-        if _is_running(node):
-            await client.stop_node(lab_path, target_id)
-        await client.edit_lab_node(lab_path, target_id, **fields)
-        updated.append(node_name)
-
-    plural = "s" if len(updated) != 1 else ""
-    return {
-        "status": "success",
-        "message": (
-            f"Updated {len(updated)} node{plural} using template {resolved_template_id!r} "
-            f"({normalized_component}={change_value_label!r}): {', '.join(updated)}."
-        ),
-    }
 
 
 async def get_node_interfaces(client: EvengClient, lab_path: str, node_id: int) -> dict[str, Any]:
@@ -1639,179 +1645,186 @@ async def connect_interface(
     was going to fail anyway (e.g. the *other* node having no free
     interface, or needing confirmation for an already-connected one).
     """
-    node_to_node = target_node_id is not None
-    node_to_network = network_id is not None or network_name is not None
-    if node_to_node == node_to_network:
-        return {
-            "status": "error",
-            "message": (
-                "Exactly one target is required: target_node_id (connect to another "
-                "node) or network_id/network_name (connect to an existing network) -- "
-                "not both, not neither."
-            ),
-        }
+    async with lab_lock(lab_path):
+        node_to_node = target_node_id is not None
+        node_to_network = network_id is not None or network_name is not None
+        if node_to_node == node_to_network:
+            return {
+                "status": "error",
+                "message": (
+                    "Exactly one target is required: target_node_id (connect to another "
+                    "node) or network_id/network_name (connect to an existing network) -- "
+                    "not both, not neither."
+                ),
+            }
 
-    src_result = await client.get_node_interfaces(lab_path, node_id)
-    src_data = src_result.get("data") or {}
-    if not isinstance(src_data, dict):
-        src_data = {}
-    src_resolved = _resolve_interface_selection(src_data, interface, interface_selection)
-    if "index" not in src_resolved:
-        src_resolved = dict(src_resolved)
-        src_resolved["message"] = f"Node {node_id}: {src_resolved['message']}"
-        return src_resolved
-    src_index = src_resolved["index"]
+        src_result = await client.get_node_interfaces(lab_path, node_id)
+        src_data = src_result.get("data") or {}
+        if not isinstance(src_data, dict):
+            src_data = {}
+        src_resolved = _resolve_interface_selection(src_data, interface, interface_selection)
+        if "index" not in src_resolved:
+            src_resolved = dict(src_resolved)
+            src_resolved["message"] = f"Node {node_id}: {src_resolved['message']}"
+            return src_resolved
+        src_index = src_resolved["index"]
 
-    src_connected_to = _connected_network_description(src_data, src_index)
-    if src_connected_to and not confirm:
-        src_ethernet = src_data.get("ethernet") or []
-        src_name = str(src_ethernet[src_index].get("name", f"index {src_index}"))
-        return {
-            "status": "confirmation_required",
-            "message": (
-                f"Node {node_id}: interface {src_name} (index {src_index}) is already "
-                f"connected to {src_connected_to}. Connecting it to a new target will "
-                "disconnect it from that, with no separate undo -- reply with "
-                "confirm=true to proceed anyway, or choose a different, currently "
-                "available interface instead."
-            ),
-        }
-
-    resolved_network_id: int | str | None = None
-    dst_index: int | None = None
-
-    if node_to_node:
-        assert target_node_id is not None  # guaranteed by node_to_node's own definition above
-        dst_result = await client.get_node_interfaces(lab_path, target_node_id)
-        dst_data = dst_result.get("data") or {}
-        if not isinstance(dst_data, dict):
-            dst_data = {}
-        dst_resolved = _resolve_interface_selection(dst_data, target_interface, target_interface_selection)
-        if "index" not in dst_resolved:
-            dst_resolved = dict(dst_resolved)
-            dst_resolved["message"] = f"Node {target_node_id} (target): {dst_resolved['message']}"
-            return dst_resolved
-        dst_index = dst_resolved["index"]
-
-        dst_connected_to = _connected_network_description(dst_data, dst_index)
-        if dst_connected_to and not confirm:
-            dst_ethernet = dst_data.get("ethernet") or []
-            dst_name = str(dst_ethernet[dst_index].get("name", f"index {dst_index}"))
+        src_connected_to = _connected_network_description(src_data, src_index)
+        if src_connected_to and not confirm:
+            src_ethernet = src_data.get("ethernet") or []
+            src_name = str(src_ethernet[src_index].get("name", f"index {src_index}"))
             return {
                 "status": "confirmation_required",
                 "message": (
-                    f"Node {target_node_id} (target): interface {dst_name} "
-                    f"(index {dst_index}) is already connected to {dst_connected_to}. "
-                    "Connecting it to a new target will disconnect it from that, with "
-                    "no separate undo -- reply with confirm=true to proceed anyway, or "
-                    "choose a different, currently available interface instead."
+                    f"Node {node_id}: interface {src_name} (index {src_index}) is already "
+                    f"connected to {src_connected_to}. Connecting it to a new target will "
+                    "disconnect it from that, with no separate undo -- reply with "
+                    "confirm=true to proceed anyway, or choose a different, currently "
+                    "available interface instead."
                 ),
             }
-    else:
-        resolved_network_id = network_id
-        if resolved_network_id is None:
-            networks_result = await client.list_lab_networks(lab_path)
-            networks_data = networks_result.get("data") or {}
-            needle = (network_name or "").strip().lower()
-            candidates = list(networks_data.items()) if isinstance(networks_data, dict) else []
-            matches = [
-                (key, net)
-                for key, net in candidates
-                if isinstance(net, dict) and str(net.get("name", "")).strip().lower() == needle
-            ]
-            if not matches:
+
+        resolved_network_id: int | str | None = None
+        dst_index: int | None = None
+
+        if node_to_node:
+            assert target_node_id is not None  # guaranteed by node_to_node's own definition above
+            dst_result = await client.get_node_interfaces(lab_path, target_node_id)
+            dst_data = dst_result.get("data") or {}
+            if not isinstance(dst_data, dict):
+                dst_data = {}
+            dst_resolved = _resolve_interface_selection(dst_data, target_interface, target_interface_selection)
+            if "index" not in dst_resolved:
+                dst_resolved = dict(dst_resolved)
+                dst_resolved["message"] = f"Node {target_node_id} (target): {dst_resolved['message']}"
+                return dst_resolved
+            dst_index = dst_resolved["index"]
+
+            dst_connected_to = _connected_network_description(dst_data, dst_index)
+            if dst_connected_to and not confirm:
+                dst_ethernet = dst_data.get("ethernet") or []
+                dst_name = str(dst_ethernet[dst_index].get("name", f"index {dst_index}"))
                 return {
-                    "status": "cancelled",
-                    "message": f"No network found named {network_name!r} in this lab.",
+                    "status": "confirmation_required",
+                    "message": (
+                        f"Node {target_node_id} (target): interface {dst_name} "
+                        f"(index {dst_index}) is already connected to {dst_connected_to}. "
+                        "Connecting it to a new target will disconnect it from that, with "
+                        "no separate undo -- reply with confirm=true to proceed anyway, or "
+                        "choose a different, currently available interface instead."
+                    ),
                 }
-            if len(matches) > 1:
+        else:
+            resolved_network_id = network_id
+            if resolved_network_id is None:
+                networks_result = await client.list_lab_networks(lab_path)
+                networks_data = networks_result.get("data") or {}
+                needle = (network_name or "").strip().lower()
+                candidates = list(networks_data.items()) if isinstance(networks_data, dict) else []
+                matches = [
+                    (key, net)
+                    for key, net in candidates
+                    if isinstance(net, dict) and str(net.get("name", "")).strip().lower() == needle
+                ]
+                if not matches:
+                    return {
+                        "status": "cancelled",
+                        "message": f"No network found named {network_name!r} in this lab.",
+                    }
+                if len(matches) > 1:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"{len(matches)} networks are named {network_name!r}; use "
+                            "network_id instead to pick one unambiguously."
+                        ),
+                    }
+                key, net = matches[0]
+                resolved_network_id = net.get("id", key)
+
+        # Everything above is read-only / side-effect-free. From here on the
+        # connection is confirmed workable, so it's safe to stop node(s) if
+        # this is Community edition and they're running.
+        status_result = await client.get_status()
+        status_data = status_result.get("data") or {}
+        is_pro = is_pro_edition(status_data if isinstance(status_data, dict) else {})
+
+        stopped_nodes: list[int] = []
+        if await _ensure_stopped_for_connection(client, lab_path, node_id, is_pro):
+            stopped_nodes.append(node_id)
+        if target_node_id is not None and await _ensure_stopped_for_connection(
+            client, lab_path, target_node_id, is_pro
+        ):
+            stopped_nodes.append(target_node_id)
+
+        stop_note = ""
+        if stopped_nodes:
+            ids = ", ".join(str(n) for n in stopped_nodes)
+            stop_note = (
+                f" (Community edition: stopped node(s) {ids} first, since interfaces can't be wired while running.)"
+            )
+
+        if node_to_node:
+            assert target_node_id is not None and dst_index is not None  # guaranteed by node_to_node's own definition
+            network_result = await client.add_lab_network(
+                lab_path,
+                network_type="bridge",
+                name=f"p2p_{node_id}_{src_index}_{target_node_id}_{dst_index}",
+            )
+            new_network_id = (network_result.get("data") or {}).get("id")
+            if new_network_id is None:
+                return {
+                    "status": "error",
+                    "message": (f"Created the backing bridge network but couldn't read back its id.{stop_note}"),
+                }
+            new_network_id = int(new_network_id)
+
+            # EVE-NG has a confirmed timing issue where a just-created network
+            # isn't immediately ready to be wired to -- wait for it to actually
+            # show up before attempting to reference it, rather than failing
+            # with a confusing "invalid network_id" error most of the time.
+            if not await _wait_for_network_ready(client, lab_path, new_network_id):
                 return {
                     "status": "error",
                     "message": (
-                        f"{len(matches)} networks are named {network_name!r}; use "
-                        "network_id instead to pick one unambiguously."
+                        f"Created bridge network (id {new_network_id}, reported success) but "
+                        "it never showed up in list_lab_networks. This project previously had "
+                        "a bug that caused exactly this (add_lab_network omitting left/top), "
+                        f"now fixed -- if it's still happening, something else needs "
+                        f"investigating rather than assuming it's just slow.{stop_note}"
                     ),
                 }
-            key, net = matches[0]
-            resolved_network_id = net.get("id", key)
 
-    # Everything above is read-only / side-effect-free. From here on the
-    # connection is confirmed workable, so it's safe to stop node(s) if
-    # this is Community edition and they're running.
-    status_result = await client.get_status()
-    status_data = status_result.get("data") or {}
-    is_pro = is_pro_edition(status_data if isinstance(status_data, dict) else {})
+            await client.set_node_interface(lab_path, node_id, src_index, new_network_id)
+            await client.set_node_interface(lab_path, target_node_id, dst_index, new_network_id)
 
-    stopped_nodes: list[int] = []
-    if await _ensure_stopped_for_connection(client, lab_path, node_id, is_pro):
-        stopped_nodes.append(node_id)
-    if target_node_id is not None and await _ensure_stopped_for_connection(client, lab_path, target_node_id, is_pro):
-        stopped_nodes.append(target_node_id)
+            # Confirmed against a working reference implementation: rendering as
+            # a direct line (not a separate network icon) is NOT something set
+            # at creation time -- the bridge is created visible, both
+            # interfaces are wired, and only then is its own visibility field
+            # set to 0. Doing this at creation time instead (what this project
+            # tried first) doesn't produce a direct line live -- confirmed by
+            # the user seeing no cable rendered at all rather than one.
+            await client.edit_lab_network(lab_path, new_network_id, visibility=0)
 
-    stop_note = ""
-    if stopped_nodes:
-        ids = ", ".join(str(n) for n in stopped_nodes)
-        stop_note = f" (Community edition: stopped node(s) {ids} first, since interfaces can't be wired while running.)"
-
-    if node_to_node:
-        assert target_node_id is not None and dst_index is not None  # guaranteed by node_to_node's own definition
-        network_result = await client.add_lab_network(
-            lab_path,
-            network_type="bridge",
-            name=f"p2p_{node_id}_{src_index}_{target_node_id}_{dst_index}",
-        )
-        new_network_id = (network_result.get("data") or {}).get("id")
-        if new_network_id is None:
             return {
-                "status": "error",
-                "message": (f"Created the backing bridge network but couldn't read back its id.{stop_note}"),
-            }
-        new_network_id = int(new_network_id)
-
-        # EVE-NG has a confirmed timing issue where a just-created network
-        # isn't immediately ready to be wired to -- wait for it to actually
-        # show up before attempting to reference it, rather than failing
-        # with a confusing "invalid network_id" error most of the time.
-        if not await _wait_for_network_ready(client, lab_path, new_network_id):
-            return {
-                "status": "error",
+                "status": "success",
                 "message": (
-                    f"Created bridge network (id {new_network_id}, reported success) but "
-                    "it never showed up in list_lab_networks. This project previously had "
-                    "a bug that caused exactly this (add_lab_network omitting left/top), "
-                    f"now fixed -- if it's still happening, something else needs "
-                    f"investigating rather than assuming it's just slow.{stop_note}"
+                    f"Connected node {node_id} (interface {src_index}) to node "
+                    f"{target_node_id} (interface {dst_index}), via a new bridge "
+                    f"network (id {new_network_id}).{stop_note}"
                 ),
             }
 
-        await client.set_node_interface(lab_path, node_id, src_index, new_network_id)
-        await client.set_node_interface(lab_path, target_node_id, dst_index, new_network_id)
-
-        # Confirmed against a working reference implementation: rendering as
-        # a direct line (not a separate network icon) is NOT something set
-        # at creation time -- the bridge is created visible, both
-        # interfaces are wired, and only then is its own visibility field
-        # set to 0. Doing this at creation time instead (what this project
-        # tried first) doesn't produce a direct line live -- confirmed by
-        # the user seeing no cable rendered at all rather than one.
-        await client.edit_lab_network(lab_path, new_network_id, visibility=0)
+        assert resolved_network_id is not None  # guaranteed by the node_to_network branch above
+        await client.set_node_interface(lab_path, node_id, src_index, int(resolved_network_id))
 
         return {
             "status": "success",
             "message": (
-                f"Connected node {node_id} (interface {src_index}) to node "
-                f"{target_node_id} (interface {dst_index}), via a new bridge "
-                f"network (id {new_network_id}).{stop_note}"
+                f"Connected node {node_id} (interface {src_index}) to network {resolved_network_id}.{stop_note}"
             ),
         }
-
-    assert resolved_network_id is not None  # guaranteed by the node_to_network branch above
-    await client.set_node_interface(lab_path, node_id, src_index, int(resolved_network_id))
-
-    return {
-        "status": "success",
-        "message": (f"Connected node {node_id} (interface {src_index}) to network {resolved_network_id}.{stop_note}"),
-    }
 
 
 async def _all_node_ids_and_names(client: EvengClient, lab_path: str) -> list[tuple[int, str]]:
@@ -1888,10 +1901,11 @@ async def start_node(client: EvengClient, lab_path: str, node_id: int | None = N
     `change_node_delay`) when started this way -- EVE-NG's staggered-boot
     behavior isn't tied to using the bulk endpoint specifically.
     """
-    if node_id is not None:
-        return await client.start_node(lab_path, node_id)
-    nodes = await _all_node_ids_and_names(client, lab_path)
-    return await _loop_node_action(lab_path, nodes, client.start_node, "started")
+    async with lab_lock(lab_path):
+        if node_id is not None:
+            return await client.start_node(lab_path, node_id)
+        nodes = await _all_node_ids_and_names(client, lab_path)
+        return await _loop_node_action(lab_path, nodes, client.start_node, "started")
 
 
 async def stop_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
@@ -1901,10 +1915,11 @@ async def stop_node(client: EvengClient, lab_path: str, node_id: int | None = No
     using EVE-NG's bulk `/nodes/stop` endpoint -- see `_loop_node_action`
     for why.
     """
-    if node_id is not None:
-        return await client.stop_node(lab_path, node_id)
-    nodes = await _all_node_ids_and_names(client, lab_path)
-    return await _loop_node_action(lab_path, nodes, client.stop_node, "stopped")
+    async with lab_lock(lab_path):
+        if node_id is not None:
+            return await client.stop_node(lab_path, node_id)
+        nodes = await _all_node_ids_and_names(client, lab_path)
+        return await _loop_node_action(lab_path, nodes, client.stop_node, "stopped")
 
 
 async def wipe_node(
@@ -1924,43 +1939,44 @@ async def wipe_node(
     happens; only a second call with `confirm=true` (and `node_id="all"`
     again) wipes them.
     """
-    if node_id is None:
-        return {
-            "status": "error",
-            "message": (
-                "node_id is required. Pass a specific node's id to wipe just that "
-                'node, or node_id="all" to wipe every node in the lab -- which asks '
-                "for confirmation before it actually wipes anything."
-            ),
-        }
+    async with lab_lock(lab_path):
+        if node_id is None:
+            return {
+                "status": "error",
+                "message": (
+                    "node_id is required. Pass a specific node's id to wipe just that "
+                    'node, or node_id="all" to wipe every node in the lab -- which asks '
+                    "for confirmation before it actually wipes anything."
+                ),
+            }
 
-    if isinstance(node_id, str) and node_id.strip().lower() != "all":
-        return {
-            "status": "error",
-            "message": f'node_id must be a node id, or the literal string "all" -- got {node_id!r}.',
-        }
+        if isinstance(node_id, str) and node_id.strip().lower() != "all":
+            return {
+                "status": "error",
+                "message": f'node_id must be a node id, or the literal string "all" -- got {node_id!r}.',
+            }
 
-    if isinstance(node_id, int):
-        return await client.wipe_node(lab_path, node_id)
+        if isinstance(node_id, int):
+            return await client.wipe_node(lab_path, node_id)
 
-    nodes = await _all_node_ids_and_names(client, lab_path)
-    if not nodes:
-        return {"status": "cancelled", "message": "No nodes found in this lab."}
+        nodes = await _all_node_ids_and_names(client, lab_path)
+        if not nodes:
+            return {"status": "cancelled", "message": "No nodes found in this lab."}
 
-    if not confirm:
-        plural = "s" if len(nodes) != 1 else ""
-        described = ", ".join(f"{name} (id {nid})" for nid, name in nodes)
-        return {
-            "status": "confirmation_required",
-            "message": (
-                f"This will wipe ALL {len(nodes)} node{plural} in this lab, deleting "
-                f"each one's saved config so it rebuilds from image: {described}.\n\n"
-                "Reply 'accept' or 'yes' to proceed; anything else cancels."
-            ),
-            "data": {"matches": [f"{name} (id {nid})" for nid, name in nodes]},
-        }
+        if not confirm:
+            plural = "s" if len(nodes) != 1 else ""
+            described = ", ".join(f"{name} (id {nid})" for nid, name in nodes)
+            return {
+                "status": "confirmation_required",
+                "message": (
+                    f"This will wipe ALL {len(nodes)} node{plural} in this lab, deleting "
+                    f"each one's saved config so it rebuilds from image: {described}.\n\n"
+                    "Reply 'accept' or 'yes' to proceed; anything else cancels."
+                ),
+                "data": {"matches": [f"{name} (id {nid})" for nid, name in nodes]},
+            }
 
-    return await client.wipe_node(lab_path, None)
+        return await client.wipe_node(lab_path, None)
 
 
 async def export_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:

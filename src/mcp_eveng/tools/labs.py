@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
+from ..dependencies import lab_lock
 from ..edition import is_pro_edition
 
 GetClient = Callable[[], Awaitable[EvengClient]]
@@ -42,18 +43,19 @@ async def edit_lab(
     body: str | None = None,
 ) -> dict[str, Any]:
     """Edit an existing lab's metadata. Only supplied fields are changed."""
-    fields = {
-        k: v
-        for k, v in {
-            "name": name,
-            "version": version,
-            "author": author,
-            "description": description,
-            "body": body,
-        }.items()
-        if v is not None
-    }
-    return await client.edit_lab(lab_path, **fields)
+    async with lab_lock(lab_path):
+        fields = {
+            k: v
+            for k, v in {
+                "name": name,
+                "version": version,
+                "author": author,
+                "description": description,
+                "body": body,
+            }.items()
+            if v is not None
+        }
+        return await client.edit_lab(lab_path, **fields)
 
 
 # -- share_lab: add users to a lab's `shared` list, via edit_lab ---------------

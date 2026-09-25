@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, run_delete_flow
+from ..dependencies import lab_lock
 from ..search import find_by_name_case_insensitive, iter_named_records
 
 GetClient = Callable[[], Awaitable[EvengClient]]
@@ -72,53 +73,54 @@ async def add_lab_network(
     `hideme` at creation time was tried first and confirmed live not to
     produce a direct line -- no cable rendered at all instead).
     """
-    if not network_type.strip():
-        types_result = await client.list_network_types()
-        types_data = types_result.get("data") or {}
-        type_names = sorted(types_data) if isinstance(types_data, dict) else []
-        if not type_names:
+    async with lab_lock(lab_path):
+        if not network_type.strip():
+            types_result = await client.list_network_types()
+            types_data = types_result.get("data") or {}
+            type_names = sorted(types_data) if isinstance(types_data, dict) else []
+            if not type_names:
+                return {
+                    "status": "error",
+                    "message": "Could not retrieve the list of network types from the server.",
+                }
             return {
-                "status": "error",
-                "message": "Could not retrieve the list of network types from the server.",
-            }
-        return {
-            "status": "selection_required",
-            "message": (
-                f"{len(type_names)} network type(s) available:\n{format_numbered(type_names)}\n\n"
-                "Call add_lab_network again with `network_type` set to the exact name, "
-                'its number from this list, or "cloud"/"cloud0"-"cloud9" (resolved to '
-                "pnet0-pnet9 -- what the GUI calls Cloud0-Cloud9)."
-            ),
-            "data": {"types": type_names},
-        }
-
-    resolved_network_type = network_type.strip()
-    cloud_alias = _CLOUD_ALIASES.get(resolved_network_type.lower())
-    if cloud_alias is not None:
-        resolved_network_type = cloud_alias
-    elif resolved_network_type.isdigit():
-        types_result = await client.list_network_types()
-        types_data = types_result.get("data") or {}
-        type_names = sorted(types_data) if isinstance(types_data, dict) else []
-        idx = int(resolved_network_type)
-        if 1 <= idx <= len(type_names):
-            resolved_network_type = type_names[idx - 1]
-        else:
-            return {
-                "status": "error",
+                "status": "selection_required",
                 "message": (
-                    f"{resolved_network_type!r} is out of range for the current "
-                    f"{len(type_names)} network type(s):\n{format_numbered(type_names)}"
+                    f"{len(type_names)} network type(s) available:\n{format_numbered(type_names)}\n\n"
+                    "Call add_lab_network again with `network_type` set to the exact name, "
+                    'its number from this list, or "cloud"/"cloud0"-"cloud9" (resolved to '
+                    "pnet0-pnet9 -- what the GUI calls Cloud0-Cloud9)."
                 ),
                 "data": {"types": type_names},
             }
 
-    resolved_left = left if left is not None else "0"
-    resolved_top = top if top is not None else "0"
-    kwargs: dict[str, Any] = {"name": name, "left": resolved_left, "top": resolved_top}
-    if hideme is not None:
-        kwargs["hideme"] = hideme
-    return await client.add_lab_network(lab_path, resolved_network_type, **kwargs)
+        resolved_network_type = network_type.strip()
+        cloud_alias = _CLOUD_ALIASES.get(resolved_network_type.lower())
+        if cloud_alias is not None:
+            resolved_network_type = cloud_alias
+        elif resolved_network_type.isdigit():
+            types_result = await client.list_network_types()
+            types_data = types_result.get("data") or {}
+            type_names = sorted(types_data) if isinstance(types_data, dict) else []
+            idx = int(resolved_network_type)
+            if 1 <= idx <= len(type_names):
+                resolved_network_type = type_names[idx - 1]
+            else:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"{resolved_network_type!r} is out of range for the current "
+                        f"{len(type_names)} network type(s):\n{format_numbered(type_names)}"
+                    ),
+                    "data": {"types": type_names},
+                }
+
+        resolved_left = left if left is not None else "0"
+        resolved_top = top if top is not None else "0"
+        kwargs: dict[str, Any] = {"name": name, "left": resolved_left, "top": resolved_top}
+        if hideme is not None:
+            kwargs["hideme"] = hideme
+        return await client.add_lab_network(lab_path, resolved_network_type, **kwargs)
 
 
 async def edit_lab_network(
@@ -143,27 +145,28 @@ async def edit_lab_network(
     reference implementation) to be a required separate step after
     creation and wiring, not something set at creation time.
     """
-    fields = {
-        k: v
-        for k, v in {
-            "name": name,
-            "left": left,
-            "top": top,
-            "visibility": visibility,
-            "hideme": hideme,
-            "style": style,
-            "icon": icon,
-            "color": color,
-            "label": label,
-        }.items()
-        if v is not None
-    }
-    if not fields:
-        return {
-            "status": "error",
-            "message": "At least one field to change is required; none was supplied.",
+    async with lab_lock(lab_path):
+        fields = {
+            k: v
+            for k, v in {
+                "name": name,
+                "left": left,
+                "top": top,
+                "visibility": visibility,
+                "hideme": hideme,
+                "style": style,
+                "icon": icon,
+                "color": color,
+                "label": label,
+            }.items()
+            if v is not None
         }
-    return await client.edit_lab_network(lab_path, network_id, **fields)
+        if not fields:
+            return {
+                "status": "error",
+                "message": "At least one field to change is required; none was supplied.",
+            }
+        return await client.edit_lab_network(lab_path, network_id, **fields)
 
 
 def _network_id(network: dict[str, Any]) -> int:
@@ -208,28 +211,29 @@ async def delete_lab_network(
          asks you to call again with confirm=true.
       3. Call again with confirm=true to actually delete.
     """
-    if not name or not name.strip():
-        return {
-            "status": "error",
-            "message": "A network name is required to delete a network; none was supplied.",
-        }
+    async with lab_lock(lab_path):
+        if not name or not name.strip():
+            return {
+                "status": "error",
+                "message": "A network name is required to delete a network; none was supplied.",
+            }
 
-    candidates = await _find_networks_by_name(client, lab_path, name)
+        candidates = await _find_networks_by_name(client, lab_path, name)
 
-    async def _perform_delete(network: dict[str, Any]) -> str | None:
-        await client.delete_lab_network(lab_path, _network_id(network))
-        return None
+        async def _perform_delete(network: dict[str, Any]) -> str | None:
+            await client.delete_lab_network(lab_path, _network_id(network))
+            return None
 
-    return await run_delete_flow(
-        candidates,
-        matches_exact=lambda n, needle: _network_name(n).strip().lower() == needle,
-        describe=_network_label,
-        noun="network",
-        selection=selection,
-        confirm=confirm,
-        allow_multiple=True,
-        perform_delete=_perform_delete,
-    )
+        return await run_delete_flow(
+            candidates,
+            matches_exact=lambda n, needle: _network_name(n).strip().lower() == needle,
+            describe=_network_label,
+            noun="network",
+            selection=selection,
+            confirm=confirm,
+            allow_multiple=True,
+            perform_delete=_perform_delete,
+        )
 
 
 def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:

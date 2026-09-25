@@ -45,6 +45,31 @@ def _quote_path(path: str) -> str:
     return quote(path, safe="/")
 
 
+def _require(result: JsonDict | None, method: str, path: str) -> JsonDict:
+    """Turn `_request`'s `None` -- a successful-looking HTTP status whose
+    body didn't parse as JSON -- into an actual, readable error.
+
+    Every `_get`/`_post`/`_put`/`_delete` caller used to do
+    `assert result is not None` and trust `_request` never really
+    returned `None` in practice. When it did, `str(AssertionError())` is
+    a literal empty string: the tool call, and anything upstream of it
+    (including the AI agent using this server), saw a blank error with
+    no indication of what went wrong or which request caused it. This
+    raises a proper `EvengAPIError` naming the method and path instead,
+    right where the ambiguity actually arises, so every caller gets a
+    real message for free rather than each needing its own check.
+    """
+    if result is None:
+        raise EvengAPIError(
+            f"EVE-NG returned an empty or unparseable response body for {method} {path} "
+            "(the HTTP status itself looked successful, so this wasn't already reported "
+            "as a server error above). If this happened right after another request to "
+            "the same lab, it may be transient contention on EVE-NG's side -- retrying "
+            "often resolves it."
+        )
+    return result
+
+
 class EvengClient:
     """Thin async wrapper around the EVENG REST API."""
 
@@ -159,17 +184,17 @@ class EvengClient:
             status=status,
         )
 
-    async def _get(self, path: str, **kw: Any) -> JsonDict | None:
-        return await self._request("GET", path, **kw)
+    async def _get(self, path: str, **kw: Any) -> JsonDict:
+        return _require(await self._request("GET", path, **kw), "GET", path)
 
-    async def _post(self, path: str, json: JsonDict | None = None, **kw: Any) -> JsonDict | None:
-        return await self._request("POST", path, json=json, **kw)
+    async def _post(self, path: str, json: JsonDict | None = None, **kw: Any) -> JsonDict:
+        return _require(await self._request("POST", path, json=json, **kw), "POST", path)
 
-    async def _put(self, path: str, json: JsonDict | None = None, **kw: Any) -> JsonDict | None:
-        return await self._request("PUT", path, json=json, **kw)
+    async def _put(self, path: str, json: JsonDict | None = None, **kw: Any) -> JsonDict:
+        return _require(await self._request("PUT", path, json=json, **kw), "PUT", path)
 
-    async def _delete(self, path: str, **kw: Any) -> JsonDict | None:
-        return await self._request("DELETE", path, **kw)
+    async def _delete(self, path: str, **kw: Any) -> JsonDict:
+        return _require(await self._request("DELETE", path, **kw), "DELETE", path)
 
     # -- auth ------------------------------------------------------------
 
@@ -186,14 +211,16 @@ class EvengClient:
         return result
 
     async def logout(self) -> JsonDict:
-        result = await self._get("/auth/logout", auto_login=False)
+        # Deliberately calls `_request` directly, not `_get` -- `_get` now
+        # raises via `_require` on an empty/unparseable body (see above),
+        # but logout is the one confirmed case where EVE-NG returning
+        # nothing back is a legitimate outcome, not an error.
+        result = await self._request("GET", "/auth/logout", auto_login=False)
         self._authenticated = False
         return result or {"status": "success", "message": "Logged out"}
 
     async def whoami(self) -> JsonDict:
-        result = await self._get("/auth")
-        assert result is not None
-        return result
+        return await self._get("/auth")
 
     async def ensure_authenticated(self) -> None:
         if not self._authenticated:
@@ -202,51 +229,33 @@ class EvengClient:
     # -- system ------------------------------------------------------------
 
     async def get_status(self) -> JsonDict:
-        result = await self._get("/status")
-        assert result is not None
-        return result
+        return await self._get("/status")
 
     async def list_node_templates(self) -> JsonDict:
-        result = await self._get("/list/templates/")
-        assert result is not None
-        return result
+        return await self._get("/list/templates/")
 
     async def get_node_template(self, template: str) -> JsonDict:
-        result = await self._get(f"/list/templates/{quote(template)}")
-        assert result is not None
-        return result
+        return await self._get(f"/list/templates/{quote(template)}")
 
     async def list_network_types(self) -> JsonDict:
-        result = await self._get("/list/networks")
-        assert result is not None
-        return result
+        return await self._get("/list/networks")
 
     async def list_user_roles(self) -> JsonDict:
-        result = await self._get("/list/roles")
-        assert result is not None
-        return result
+        return await self._get("/list/roles")
 
     # -- folders -----------------------------------------------------------
 
     async def list_folder(self, path: str = "/") -> JsonDict:
-        result = await self._get(f"/folders{_quote_path(path)}")
-        assert result is not None
-        return result
+        return await self._get(f"/folders{_quote_path(path)}")
 
     async def add_folder(self, path: str, name: str) -> JsonDict:
-        result = await self._post("/folders", json={"path": path, "name": name})
-        assert result is not None
-        return result
+        return await self._post("/folders", json={"path": path, "name": name})
 
     async def move_folder(self, path: str, new_path: str) -> JsonDict:
-        result = await self._put(f"/folders{_quote_path(path)}", json={"path": new_path})
-        assert result is not None
-        return result
+        return await self._put(f"/folders{_quote_path(path)}", json={"path": new_path})
 
     async def delete_folder(self, path: str) -> JsonDict:
-        result = await self._delete(f"/folders{_quote_path(path)}")
-        assert result is not None
-        return result
+        return await self._delete(f"/folders{_quote_path(path)}")
 
     async def list_all_labs(
         self,
@@ -357,14 +366,10 @@ class EvengClient:
     # -- users ---------------------------------------------------------------
 
     async def list_users(self) -> JsonDict:
-        result = await self._get("/users/")
-        assert result is not None
-        return result
+        return await self._get("/users/")
 
     async def get_user(self, username: str) -> JsonDict:
-        result = await self._get(f"/users/{quote(username)}")
-        assert result is not None
-        return result
+        return await self._get(f"/users/{quote(username)}")
 
     async def add_user(
         self,
@@ -388,26 +393,18 @@ class EvengClient:
             "pod": pod,
             "pexpiration": pexpiration,
         }
-        result = await self._post("/users", json=payload)
-        assert result is not None
-        return result
+        return await self._post("/users", json=payload)
 
     async def edit_user(self, username: str, **fields: Any) -> JsonDict:
-        result = await self._put(f"/users/{quote(username)}", json=fields)
-        assert result is not None
-        return result
+        return await self._put(f"/users/{quote(username)}", json=fields)
 
     async def delete_user(self, username: str) -> JsonDict:
-        result = await self._delete(f"/users/{quote(username)}")
-        assert result is not None
-        return result
+        return await self._delete(f"/users/{quote(username)}")
 
     # -- labs -----------------------------------------------------------------
 
     async def get_lab(self, lab_path: str) -> JsonDict:
-        result = await self._get(f"/labs{_quote_path(lab_path)}")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}")
 
     async def create_lab(
         self,
@@ -427,35 +424,23 @@ class EvengClient:
             "description": description,
             "body": body,
         }
-        result = await self._post("/labs", json=payload)
-        assert result is not None
-        return result
+        return await self._post("/labs", json=payload)
 
     async def edit_lab(self, lab_path: str, **fields: Any) -> JsonDict:
-        result = await self._put(f"/labs{_quote_path(lab_path)}", json=fields)
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}", json=fields)
 
     async def move_lab(self, lab_path: str, new_path: str) -> JsonDict:
-        result = await self._put(f"/labs{_quote_path(lab_path)}/move", json={"path": new_path})
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}/move", json={"path": new_path})
 
     async def delete_lab(self, lab_path: str) -> JsonDict:
-        result = await self._delete(f"/labs{_quote_path(lab_path)}")
-        assert result is not None
-        return result
+        return await self._delete(f"/labs{_quote_path(lab_path)}")
 
     async def get_lab_topology(self, lab_path: str) -> JsonDict:
-        result = await self._get(f"/labs{_quote_path(lab_path)}/topology")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/topology")
 
     async def get_lab_links(self, lab_path: str) -> JsonDict:
         """All ethernet/serial endpoints available for connecting nodes."""
-        result = await self._get(f"/labs{_quote_path(lab_path)}/links")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/links")
 
     async def set_link_quality(self, lab_path: str, payload: dict[str, Any]) -> JsonDict:
         """PUT the full link-quality state (both endpoints) for one connection.
@@ -465,17 +450,13 @@ class EvengClient:
         (captured live from a real PRO server's own GUI network traffic) and
         restrictions; this is just the raw PUT.
         """
-        result = await self._put(f"/labs{_quote_path(lab_path)}/quality", json=payload)
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}/quality", json=payload)
 
     # -- lab networks -----------------------------------------------------------
 
     async def list_lab_networks(self, lab_path: str, network_id: int | None = None) -> JsonDict:
         suffix = f"/{network_id}" if network_id is not None else ""
-        result = await self._get(f"/labs{_quote_path(lab_path)}/networks{suffix}")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/networks{suffix}")
 
     async def add_lab_network(
         self,
@@ -532,14 +513,10 @@ class EvengClient:
         }
         if name is not None:
             payload["name"] = name
-        result = await self._post(f"/labs{_quote_path(lab_path)}/networks", json=payload)
-        assert result is not None
-        return result
+        return await self._post(f"/labs{_quote_path(lab_path)}/networks", json=payload)
 
     async def delete_lab_network(self, lab_path: str, network_id: int) -> JsonDict:
-        result = await self._delete(f"/labs{_quote_path(lab_path)}/networks/{network_id}")
-        assert result is not None
-        return result
+        return await self._delete(f"/labs{_quote_path(lab_path)}/networks/{network_id}")
 
     async def edit_lab_network(self, lab_path: str, network_id: int, **fields: Any) -> JsonDict:
         """PUT a partial update to an existing network. Only supplied fields are changed.
@@ -555,17 +532,13 @@ class EvengClient:
         same result live -- confirmed by the user seeing no cable
         rendered at all, rather than a direct line.
         """
-        result = await self._put(f"/labs{_quote_path(lab_path)}/networks/{network_id}", json=fields)
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}/networks/{network_id}", json=fields)
 
     # -- lab nodes --------------------------------------------------------------
 
     async def list_lab_nodes(self, lab_path: str, node_id: int | None = None) -> JsonDict:
         suffix = f"/{node_id}" if node_id is not None else ""
-        result = await self._get(f"/labs{_quote_path(lab_path)}/nodes{suffix}")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/nodes{suffix}")
 
     async def add_lab_node(
         self,
@@ -617,14 +590,10 @@ class EvengClient:
                 payload[key] = value
         if extra:
             payload.update(extra)
-        result = await self._post(f"/labs{_quote_path(lab_path)}/nodes", json=payload)
-        assert result is not None
-        return result
+        return await self._post(f"/labs{_quote_path(lab_path)}/nodes", json=payload)
 
     async def delete_lab_node(self, lab_path: str, node_id: int) -> JsonDict:
-        result = await self._delete(f"/labs{_quote_path(lab_path)}/nodes/{node_id}")
-        assert result is not None
-        return result
+        return await self._delete(f"/labs{_quote_path(lab_path)}/nodes/{node_id}")
 
     async def edit_lab_node(self, lab_path: str, node_id: int, **fields: Any) -> JsonDict:
         """PUT a partial update to an existing node. Only supplied fields are changed.
@@ -634,14 +603,10 @@ class EvengClient:
         tool layer (`tools/nodes.py`) enforces that, not this method, which
         just performs the raw PUT.
         """
-        result = await self._put(f"/labs{_quote_path(lab_path)}/nodes/{node_id}", json=fields)
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}/nodes/{node_id}", json=fields)
 
     async def get_node_interfaces(self, lab_path: str, node_id: int) -> JsonDict:
-        result = await self._get(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces")
 
     async def set_node_interface(self, lab_path: str, node_id: int, interface_index: int, network_id: int) -> JsonDict:
         """Wire one of a node's interfaces to a network.
@@ -655,15 +620,11 @@ class EvengClient:
         /nodes/{id}/interfaces` with a body of `{"<index>": "<network_id>"}`.
         """
         payload = {str(interface_index): str(network_id)}
-        result = await self._put(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces", json=payload)
-        assert result is not None
-        return result
+        return await self._put(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/interfaces", json=payload)
 
     async def _node_action(self, lab_path: str, action: str, node_id: int | None) -> JsonDict:
         suffix = f"/{node_id}/{action}" if node_id is not None else f"/{action}"
-        result = await self._get(f"/labs{_quote_path(lab_path)}/nodes{suffix}")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/nodes{suffix}")
 
     async def start_node(self, lab_path: str, node_id: int | None = None) -> JsonDict:
         """Start a single node, or every node in the lab if `node_id` is None."""
@@ -682,9 +643,7 @@ class EvengClient:
 
     async def list_lab_pictures(self, lab_path: str, picture_id: int | None = None) -> JsonDict:
         suffix = f"/{picture_id}" if picture_id is not None else ""
-        result = await self._get(f"/labs{_quote_path(lab_path)}/pictures{suffix}")
-        assert result is not None
-        return result
+        return await self._get(f"/labs{_quote_path(lab_path)}/pictures{suffix}")
 
 
 __all__ = [
