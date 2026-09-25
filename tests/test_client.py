@@ -256,6 +256,42 @@ async def test_400_unauthorized_also_triggers_relogin_and_retries(
     assert client._authenticated is True
 
 
+async def test_412_unauthorized_also_triggers_relogin_and_retries(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # Regression test: confirmed by reading EVE-NG's own PHP source
+    # (api_authentication.php's apiAuthorization(), called by nearly
+    # every authenticated endpoint) that an invalid/expired session
+    # cookie comes back as HTTP 412 -- not 400 or 401 -- with
+    # `status: "unauthorized"` and message code 90001. EVE-NG's own
+    # published docs don't mention 412 at all; only /auth (whoami) is
+    # special-cased to return 401 instead. Without this, session/cookie
+    # loss on any OTHER endpoint never triggered a relogin, so a retry
+    # just kept hitting the same dead session and failing with 90001
+    # again every time.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/status",
+        status_code=412,
+        json={"code": 412, "status": "unauthorized", "message": "User is not logged in (90001)."},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{base_url}/auth/login",
+        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/status",
+        json={"code": 200, "status": "success", "data": {"version": "development"}, "message": "ok"},
+    )
+
+    result = await client.get_status()
+
+    assert result["data"]["version"] == "development"
+    assert client._authenticated is True
+
+
 async def test_unauthorized_still_after_relogin_raises_auth_error(
     client: EvengClient, base_url: str, httpx_mock: HTTPXMock
 ) -> None:
@@ -278,6 +314,33 @@ async def test_unauthorized_still_after_relogin_raises_auth_error(
         url=f"{base_url}/status",
         status_code=400,
         json={"code": 400, "status": "unauthorized", "message": "Session timed out"},
+    )
+
+    with pytest.raises(EvengAuthError):
+        await client.get_status()
+
+
+async def test_412_unauthorized_still_after_relogin_raises_auth_error(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # Same as the 400 case above, but for 412 -- must not loop forever if
+    # the session is genuinely unrecoverable (e.g. wrong credentials).
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/status",
+        status_code=412,
+        json={"code": 412, "status": "unauthorized", "message": "User is not logged in (90001)."},
+    )
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{base_url}/auth/login",
+        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/status",
+        status_code=412,
+        json={"code": 412, "status": "unauthorized", "message": "User is not logged in (90001)."},
     )
 
     with pytest.raises(EvengAuthError):

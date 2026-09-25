@@ -134,16 +134,32 @@ class EvengClient:
         # `status == "unauthorized"` in the body and missed this case
         # entirely for exactly that reason.
         #
-        # Trade-off, accepted deliberately: this means EVERY 400 gets one
-        # retry-with-relogin, including genuine validation failures
+        # A THIRD, undocumented status code also means exactly this:
+        # confirmed by reading EVE-NG's own PHP source
+        # (includes/api_authentication.php, apiAuthorization()) that the
+        # shared "is this cookie still valid?" check called by nearly
+        # every authenticated endpoint returns HTTP 412 (not 400 or 401)
+        # with `status: "unauthorized"` and message code 90001 when the
+        # session is gone. EVE-NG's own published API docs don't mention
+        # 412 at all -- only `/auth` (this client's `whoami`) is
+        # special-cased in EVE-NG's source to return 401 instead
+        # ("Set 401 not 412 for this page only -- used to refresh after a
+        # logout"), which is why relying on 400/401 alone worked for
+        # `whoami` but silently missed session/cookie loss on almost
+        # every other endpoint: no relogin ever fired, so a repeated call
+        # just kept hitting the same dead session and failing with 90001
+        # again on every retry.
+        #
+        # Trade-off, accepted deliberately: this means EVERY 400/412 gets
+        # one retry-with-relogin, including genuine validation failures
         # unrelated to auth (e.g. an invalid template name) -- for those,
-        # the retry just reproduces the same 400 (relogging in doesn't
+        # the retry just reproduces the same error (relogging in doesn't
         # fix bad parameters), so the final error the caller sees is
         # identical, at the cost of one extra round-trip. That's a better
         # trade than silently missing real session invalidation, which
         # is confirmed to happen and previously had no reliable signal
         # to detect from the response body alone.
-        needs_relogin = auto_login and response.status_code in (400, 401)
+        needs_relogin = auto_login and response.status_code in (400, 401, 412)
         if needs_relogin:
             self._authenticated = False
             await self.login()

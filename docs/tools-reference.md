@@ -92,6 +92,23 @@ either way, just with one extra round-trip. That's a better trade than
 silently missing real session invalidation, which is now confirmed to
 happen in exactly the shared-account workflow described above.
 
+A **third**, undocumented status code means exactly the same thing:
+confirmed by reading EVE-NG's own PHP source
+(`includes/api_authentication.php`'s `apiAuthorization()`, the shared
+"is this session cookie still valid?" check called by nearly every
+authenticated endpoint) that an invalid/expired session comes back as
+**HTTP 412** — not 400 or 401 — with `status: "unauthorized"` and
+message code 90001. EVE-NG's own published API docs don't mention 412
+at all. Only `/auth` (this client's `whoami`) is special-cased in EVE-NG's
+source to return 401 instead of 412 ("Set 401 not 412 for this page
+only -- used to refresh after a logout") — which is exactly why relying
+on 400/401 alone worked for `whoami` but silently missed session/cookie
+loss on every *other* endpoint (labs, nodes, networks, folders, users,
+status, templates — all of it): no relogin ever fired, so a retry just
+kept hitting the same dead session and failing with 90001 again, every
+time. `412` is now included in the same relogin-and-retry check as
+`400`/`401`.
+
 If you're troubleshooting something similar, using a separate, dedicated
 account for this server (rather than sharing your own login) rules this
 class of issue out entirely.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-25
+
+### Fixed
+- **Session/cookie loss on almost every endpoint except `/auth` never
+  triggered a relogin, so retries kept failing with the same error
+  (EVE-NG message code 90001) instead of transparently recovering.**
+  Confirmed by reading EVE-NG's own PHP source
+  (`includes/api_authentication.php`'s `apiAuthorization()`, the shared
+  "is this session cookie still valid?" check called by nearly every
+  authenticated endpoint) that an invalid/expired session comes back as
+  **HTTP 412** — not 400 or 401 — with `status: "unauthorized"` and
+  message code 90001. EVE-NG's own published API docs don't mention 412
+  at all; only the `/auth` endpoint (this client's `whoami`) is
+  special-cased in EVE-NG's source to return 401 instead ("Set 401 not
+  412 for this page only -- used to refresh after a logout"), which is
+  exactly why the existing 400/401 relogin-and-retry already worked for
+  `whoami` but silently missed session loss on every other endpoint —
+  labs, nodes, networks, folders, users, status, templates, all of it.
+  Added 412 to the set of status codes that trigger one
+  relogin-and-retry, alongside the existing 400/401 handling.
+
 ## [0.8.1] - 2026-09-19
 
 ### Fixed
