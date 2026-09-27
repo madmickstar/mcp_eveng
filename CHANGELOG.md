@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-09-26
+
+### Fixed
+- **A burst of concurrent tool calls (e.g. an agent batching several
+  `add_lab_node`/`add_lab_network` calls) would have the first call to
+  finish close the shared EVENG HTTP client out from under every other
+  call still in flight**, which then failed with things like `Cannot
+  send a request, as the client has been closed.` (or, for whichever
+  request happened to be mid-read exactly when the connection was
+  yanked, a low-level exception with no message at all -- yet another
+  empty-error source, distinct from the two already fixed in 0.8.1/0.8.2).
+  Root cause: `create_server()` wired `close_client()` into FastMCP's
+  `lifespan=` parameter, which reads as "run once when the server
+  shuts down" but is actually scoped by the `mcp` SDK to run once per
+  connection/session (`--sse`, stateful `--http`) or once per individual
+  HTTP request (stateless `--http`, this project's default) -- confirmed
+  by reading `streamable_http_manager.py`'s `_serve_opening_request` and
+  `_handle_stateless_request`, both of which call `Server.run()` (which
+  enters/exits the given lifespan) fresh every time, never once for the
+  whole process. The shared, process-wide `EvengClient` singleton needs
+  to outlive every individual request/session, so tearing it down from
+  a hook scoped to just one of them meant any burst of concurrent calls
+  had a real chance of one request's completion killing every sibling
+  request sharing the same client. Fixed by dropping `lifespan=`
+  entirely and closing the client exactly once instead, in `run()`,
+  after the whole server process is done serving requests -- the one
+  point that's genuinely scoped to the entire process regardless of
+  transport. Added a regression test confirming no lifespan is wired
+  into FastMCP at all, and another confirming `close_client()` fires
+  exactly once, only after the server has finished running.
+
+## [0.8.3] - 2026-09-25
+
+### Documentation
+- **`docs/upgrading.md`'s systemd steps no longer need `chown` as part
+  of the normal flow.** `git pull` and `pip install` now run as
+  `-u mcp-eveng` (the service account itself) instead of `sudo`, so the
+  pulled files are already owned by the right user from the start.
+  Added a `systemctl status` check before *and* after both `stop` and
+  `start`, to confirm each state transition actually happened before
+  moving on. Kept the `chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng`
+  command, but moved it to a troubleshooting note below the main steps
+  for the one case it's still needed: recovering from an earlier upgrade
+  that was run as root (e.g. a plain `sudo git pull`) and left files
+  root-owned.
+
 ## [0.8.2] - 2026-09-25
 
 ### Fixed

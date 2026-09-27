@@ -8,22 +8,40 @@ again once you're done.
 **systemd deployment (Linux):**
 
 ```bash
-sudo systemctl stop mcp-eveng.service
-sudo systemctl stop mcp-relay.service   # only if you run this too
+systemctl status mcp-eveng
+sudo systemctl stop mcp-eveng
+systemctl status mcp-eveng
 
 cd /opt/mcp_eveng
-sudo git pull
-sudo chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng
+sudo -u mcp-eveng git pull
 sudo -u mcp-eveng /opt/mcp_eveng/.venv/bin/pip install /opt/mcp_eveng
 
-sudo systemctl start mcp-eveng.service
-sudo systemctl start mcp-relay.service   # only if you run this too
+sudo systemctl start mcp-eveng
+systemctl status mcp-eveng
 ```
 
-`sudo git pull` writes the pulled files as root, so `chown` hands
-`/opt/mcp_eveng` back to the `mcp-eveng` service account afterward —
-skip it and the next `pip install` (or the service itself) can fail
-on files it no longer owns.
+The two `systemctl status` calls around the `stop` aren't optional
+busywork — the first shows what you're changing, the second confirms it
+actually stopped before you touch anything under it; the same two calls
+around `start` confirm it came back up cleanly afterward. Running `git
+pull` and `pip install` as `-u mcp-eveng` (the service account itself,
+not root) means the pulled files are already owned by the right user —
+no `chown` needed as part of the normal flow.
+
+If you run `mcp-relay.service` too, repeat the same six commands for it
+(`systemctl status mcp-relay`, `sudo systemctl stop mcp-relay`, etc.) —
+they share the same checkout and venv, so one `pip install` covers both;
+you only need to stop/start each service that's actually running.
+
+If `git pull` or `pip install` fails with a permissions error — most
+likely because an earlier upgrade was run as root (e.g. `sudo git pull`)
+and left some files root-owned — fix ownership once with:
+
+```bash
+sudo chown mcp-eveng:mcp-eveng -R /opt/mcp_eveng
+```
+
+then retry the `git pull`/`pip install` lines above as `-u mcp-eveng`.
 
 **Manual install (any OS):**
 

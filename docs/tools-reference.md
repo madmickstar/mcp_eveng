@@ -148,6 +148,36 @@ doesn't change anything about lab-level operations like `create_lab`,
 `delete_lab`, `share_lab`, or `move_lab`, which aren't covered by this
 lock.
 
+### A burst of concurrent calls used to be able to crash *every* call in it
+
+A separate, deeper issue than the per-lab race above: all tool calls share
+one process-wide `EvengClient` (and the one HTTP connection/session it
+holds to EVE-NG), created once and reused — not one per request. That
+singleton needs to outlive every individual request or session for as
+long as the server process itself is running.
+
+It used to be closed too early instead. `create_server()` wired the
+client's teardown into FastMCP's `lifespan=` parameter, which reads as
+"runs once when the server shuts down" but is actually scoped by the
+`mcp` SDK to run once per connection/session (`--sse`, stateful `--http`)
+or once per individual HTTP request (stateless `--http`, this project's
+default) — never once for the whole process. In practice: an agent
+firing off several `add_lab_node`/`add_lab_network` calls at once would
+have the *first* of them to finish immediately close the shared HTTP
+client — and every other call still in flight would then fail, typically
+with `Cannot send a request, as the client has been closed.`, or
+occasionally with no message at all if it was cut off mid-read. This
+looked exactly like the per-lab race above at a glance (a burst of
+parallel calls, most of them failing) but had nothing to do with lab
+locking — it happened across different labs too, and even for read-only
+tools, since it's the shared client itself being pulled out from under
+every in-flight request, not any one tool's own logic.
+
+Fixed by dropping the `lifespan=` wiring entirely: the client is now
+closed exactly once, in `run()`, only after the whole server process is
+done serving requests — the one point that's actually scoped to the
+entire process regardless of transport.
+
 **`add_lab_node` resolves `template` by search, not by exact id.**
 `template` is a case-insensitive substring match against every available
 template's id, name, and (best-effort) vendor — e.g. `"cisco"`,

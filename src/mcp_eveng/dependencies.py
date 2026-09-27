@@ -4,7 +4,11 @@ registry for serializing multi-step operations against the same lab.
 Tool functions call `get_client()` to obtain an authenticated client without
 each of them managing connection/session lifecycle themselves. The
 singleton is created on first use and torn down via `close_client()`,
-which the server calls from its MCP lifespan shutdown hook.
+which `server.py`'s `run()` calls exactly once, after the whole server
+process is done serving requests -- deliberately NOT via FastMCP's
+`lifespan=` parameter, which the `mcp` SDK scopes per connection/session/
+request rather than per process; see the comment on `create_server()`'s
+`ToolCallLoggingFastMCP(...)` call for why that distinction matters here.
 
 Tests should not rely on this singleton: `tools.<module>.register()`
 accepts an injectable `get_client` callable specifically so unit tests can

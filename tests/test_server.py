@@ -206,6 +206,34 @@ async def test_create_server_suppresses_fastmcp_lifespan_warning() -> None:
     assert not any("incomplete definition" in str(w.message) for w in caught)
 
 
+async def test_create_server_does_not_wire_a_per_connection_lifespan() -> None:
+    # Regression guard: `create_server()` must NOT pass `lifespan=` to
+    # FastMCP. The mcp SDK's low-level `Server.run()` enters/exits whatever
+    # lifespan it's given once per connection/session (--sse, stateful
+    # --http) or once per individual request (stateless --http, this
+    # project's default) -- never once for the whole process (confirmed by
+    # reading streamable_http_manager.py's `_serve_opening_request` and
+    # `_handle_stateless_request`). A `lifespan=` that closes the shared,
+    # process-wide EvengClient singleton would tear it out from under every
+    # OTHER concurrent request/session the moment any ONE of them finished --
+    # this is exactly what a burst of concurrent add_lab_node/
+    # add_lab_network calls hit in practice (confirmed from real tool-call
+    # logs): the first call to finish closed the shared HTTP client, and
+    # every other call still in flight started failing with "Cannot send a
+    # request, as the client has been closed."
+    #
+    # `run()` closes the client itself, exactly once, after the whole
+    # server process is done serving -- so no lifespan should be configured
+    # here at all; FastMCP falls back to the SDK's own no-op default when
+    # none is given.
+    from mcp.server.lowlevel.server import lifespan as sdk_default_lifespan
+
+    settings = MCPTransportSettings(_env_file=None)  # type: ignore[call-arg]
+    mcp = create_server(settings, "stdio")
+
+    assert mcp._mcp_server.lifespan is sdk_default_lifespan
+
+
 def test_run_handles_keyboard_interrupt_gracefully(monkeypatch, capsys) -> None:
     import mcp_eveng.server as server_module
 
@@ -224,6 +252,32 @@ def test_run_handles_keyboard_interrupt_gracefully(monkeypatch, capsys) -> None:
     assert "Goodbye" in captured.err
     # stdout is reserved for the stdio JSON-RPC stream -- never write here.
     assert captured.out == ""
+
+
+def test_run_closes_the_shared_client_exactly_once_at_process_shutdown(monkeypatch) -> None:
+    # Regression guard for the same bug as
+    # test_create_server_does_not_wire_a_per_connection_lifespan above, from
+    # the other direction: confirms close_client() is actually called, and
+    # only after the (fake) server has genuinely finished running -- not
+    # zero times (client leaks forever) and not from some per-request hook.
+    import mcp_eveng.server as server_module
+
+    close_calls: list[None] = []
+
+    async def fake_close_client() -> None:
+        close_calls.append(None)
+
+    class _FakeMCP:
+        def run(self, transport: str) -> None:  # noqa: ARG002
+            assert close_calls == [], "client must not be closed before the server finishes running"
+
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "create_server", lambda settings, transport: _FakeMCP())
+    monkeypatch.setattr(server_module, "close_client", fake_close_client)
+
+    server_module.run("stdio")
+
+    assert len(close_calls) == 1
 
 
 # ============================================================================

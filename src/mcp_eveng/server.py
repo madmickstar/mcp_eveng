@@ -27,8 +27,6 @@ import logging
 import secrets
 import sys
 import warnings
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -60,15 +58,6 @@ warnings.filterwarnings(
     "ignore",
     message=r"Field 'lifespan' has an incomplete definition.*",
 )
-
-
-@asynccontextmanager
-async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
-    """Close the shared EVENG HTTP session when the MCP server shuts down."""
-    try:
-        yield
-    finally:
-        await close_client()
 
 
 def _build_transport_security(settings: MCPTransportSettings, transport: Transport) -> TransportSecuritySettings | None:
@@ -121,7 +110,23 @@ def create_server(settings: MCPTransportSettings | None = None, transport: Trans
         # restart never leaves a client holding a now-unrecognized session id.
         stateless_http=not settings.stateful,
         transport_security=transport_security,
-        lifespan=_lifespan,
+        # Deliberately no `lifespan=` here. The `mcp` SDK's low-level
+        # `Server.run()` enters/exits whatever lifespan it's given once per
+        # CONNECTION -- for `--sse`/stateful `--http` that's once per client
+        # session (confirmed in `streamable_http_manager.py`'s
+        # `_serve_opening_request`), and for stateless `--http` (this
+        # project's default) once per individual HTTP request (confirmed in
+        # the same module's `_handle_stateless_request`) -- never once for
+        # the whole process. `get_client()`'s shared, process-wide
+        # `EvengClient` singleton must outlive every individual
+        # request/session, so closing it from a lifespan scoped to just one
+        # of them would tear it out from under every OTHER one still in
+        # flight: a burst of concurrent tool calls would have the first one
+        # to finish close the shared HTTP client, and every other call still
+        # queued or in progress would then fail with things like "Cannot
+        # send a request, as the client has been closed." `run()` below
+        # closes it exactly once instead, after the whole server process is
+        # done serving requests.
     )
 
     for module in (system, folders, users, labs, networks, nodes, quality, capture, meta, console):
@@ -260,3 +265,10 @@ def run(transport: Transport = "stdio") -> None:
         # still reading it during shutdown.
         print("\nGoodbye!", file=sys.stderr)
         raise SystemExit(0) from None
+    finally:
+        # Close the shared EVENG HTTP client here, exactly once, at genuine
+        # whole-process shutdown -- deliberately NOT via FastMCP's
+        # `lifespan=` parameter; see the comment on `ToolCallLoggingFastMCP(...)`
+        # in `create_server()` above for why that would be actively harmful
+        # (it's scoped per connection/session/request, not per process).
+        anyio.run(close_client)
