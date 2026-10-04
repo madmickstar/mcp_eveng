@@ -1413,10 +1413,12 @@ def _resolve_interface_selection(
     interfaces to use for `connect_interface`.
 
     `interface`:
-      - An `int`, or a digit-only string: a literal 0-based interface
-        index, used directly regardless of whether it's currently
-        connected.
-      - Any other non-empty string: a case-insensitive substring search
+      - An `int`: a literal 0-based interface index, used directly
+        regardless of whether it's currently connected. The ONLY way to
+        get this behavior -- a digit-only *string* is deliberately NOT
+        treated the same way; see the comment at the `isinstance(interface,
+        int)` check below for why.
+      - Any string (digits included): a case-insensitive substring search
         against every *available* interface's name -- never auto-picks
         the first available interface by default; a specific interface
         must always be named or chosen.
@@ -1441,6 +1443,23 @@ def _resolve_interface_selection(
     if not isinstance(ethernet, list):
         ethernet = []
 
+    # A true `int` is the ONE unambiguous way to target a literal 0-based
+    # position -- including an already-connected interface, for
+    # re-patching -- precisely because nothing produces this *type* by
+    # accident. A digit-only STRING is deliberately NOT treated the same
+    # way below: real interface names are almost always a mix of letters
+    # and digits (Gi0/0, eth0, Serial0/0...), and a model that mangles one
+    # down to just its digits (dropping "Gi0/" to leave "0") would
+    # otherwise have that typo silently resolved to an arbitrary array
+    # position -- possibly a different interface entirely, and one that
+    # bypasses the "available (unconnected) only" check every other text
+    # input gets. Routing digit-only strings through the same
+    # name-substring search as any other text instead means: it still
+    # resolves correctly when the surviving digits happen to be a unique
+    # substring (e.g. "1" against ["eth0", "eth1"]), and fails SAFELY with
+    # a numbered list of real names when it's ambiguous (e.g. "0" against
+    # ["Gi0/0", "Gi0/1", "Gi0/2"], which all contain "0") -- never a
+    # silent wrong connection.
     if isinstance(interface, int):
         if 0 <= interface < len(ethernet):
             return {"index": interface}
@@ -1450,14 +1469,6 @@ def _resolve_interface_selection(
         }
 
     text = str(interface).strip() if interface is not None else ""
-    if text.isdigit():
-        index = int(text)
-        if 0 <= index < len(ethernet):
-            return {"index": index}
-        return {
-            "status": "error",
-            "message": f"interface index {index} is out of range (has {len(ethernet)} ethernet interfaces)",
-        }
 
     available = _available_ethernet_interfaces(interfaces_data)
     if not available:
@@ -1604,12 +1615,20 @@ async def connect_interface(
         `network_id` directly if more than one network shares that name.
 
     `interface`/`target_interface`:
-      - An interface index (int, or a digit-only string): used directly,
-        even if that interface is already connected to something -- see
-        `confirm` below for how that's guarded.
-      - Any other string: a case-insensitive *substring* search against
-        the node's *available* (unconnected) ethernet interface names --
-        can never resolve to an already-connected interface, by construction.
+      - An interface index (`int` -- not a digit-only string; see below):
+        used directly, even if that interface is already connected to
+        something -- see `confirm` below for how that's guarded.
+      - Any string, digits included: a case-insensitive *substring*
+        search against the node's *available* (unconnected) ethernet
+        interface names -- can never resolve to an already-connected
+        interface, by construction. A digit-only string is deliberately
+        NOT treated as an index: real interface names are almost always a
+        mix of letters and digits (`Gi0/0`, `eth0`, ...), and a model that
+        mangles one down to just its digits would otherwise have that
+        typo silently resolved to a possibly-unrelated array position
+        instead of failing safely (an error, or a `selection_required`
+        prompt with real names) the way every other malformed search
+        already does.
       - Omitted entirely: matches every available interface -- also
         cannot resolve to an already-connected one.
 
@@ -2438,16 +2457,23 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             `add_lab_network` -- this one stays visible on the canvas as
             its own icon, same as wiring a cloud/bridge manually in the GUI).
 
-            `interface`/`target_interface`: an interface index used
-            directly (even if already connected to something -- see
-            `confirm` below), or any other string as a case-insensitive
+            `interface`/`target_interface`: pass the interface's NAME as
+            a string (e.g. "Gi0/0") -- matched as a case-insensitive
             substring search against the node's *available* (unconnected)
-            ethernet interface names, or omit entirely to match every
-            available interface (search/omitted paths can never resolve
-            to an already-connected interface). There's no
-            auto-pick-the-first-available default -- if more than one
-            interface matches, this returns status "selection_required"
-            with a numbered list instead of guessing; reply with
+            ethernet interface names -- or omit entirely to match every
+            available interface (both of these can never resolve to an
+            already-connected interface). This also accepts a literal
+            0-based index as an actual integer (e.g. 2, not "2") for the
+            rarer case of deliberately targeting an interface by raw
+            position, including one that's already connected -- see
+            `confirm` below; a numeric-looking STRING (e.g. "2") is still
+            treated as a name search, not an index, since real interface
+            names are almost always a mix of letters and digits and a
+            plain digit string is far more likely to be a mangled name
+            than a deliberate index. There's no auto-pick-the-first-
+            available default -- if more than one interface matches, this
+            returns status "selection_required" with a numbered list
+            instead of guessing; reply with
             `interface_selection`/`target_interface_selection` -- the
             number from that list, or the exact interface name. Scoped to
             ethernet interfaces only.

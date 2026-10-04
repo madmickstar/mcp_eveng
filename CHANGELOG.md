@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-02
+
+### Fixed
+- **`connect_interface`/`target_interface` could silently resolve a
+  mangled interface name to the wrong interface.** Real EVE-NG interface
+  names are almost always a mix of letters and digits (`Gi0/0`, `eth0`,
+  `Serial0/0`...), and some AI agents were dropping the letters when
+  formatting the argument, sending e.g. `"0"` instead of `"Gi0/0"`.
+  `_resolve_interface_selection` treated *any* digit-only string the same
+  as a literal `int` index -- a plain array position, used directly with
+  no name matching at all -- so a mangled name silently connected to
+  whatever happened to sit at that position instead of the interface the
+  agent actually meant, and could even target an already-connected
+  interface, since the literal-index path bypasses the "available
+  (unconnected) only" check every other input gets. A true `int` is kept
+  working exactly as before -- it's the one unambiguous, deliberate way
+  to target a position, including an already-connected one, precisely
+  because nothing produces that *type* by accident. A digit-only
+  *string* is no longer treated as an index: it now goes through the
+  same name-substring search as any other text, so it still resolves
+  correctly when the digits happen to be a unique substring, and -- this
+  is the actual fix -- fails safely with a `selection_required` prompt
+  listing the real interface names when it's ambiguous, instead of
+  silently picking one. Added tests reproducing the exact reported
+  scenario (confirmed they fail against the old behavior) plus a
+  regression guard that `int` still bypasses the availability check.
+
 ## [0.8.4] - 2026-09-26
 
 ### Fixed

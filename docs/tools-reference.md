@@ -370,8 +370,8 @@ does not produce a direct line — it produces no visible cable at all.
   the lab's current networks and errors if more than one shares that
   name; use `network_id` directly to disambiguate.
 
-`interface`/`target_interface`: an interface index used directly, or any
-other string used as a case-insensitive *substring* search against the
+`interface`/`target_interface`: pass the name as a string (e.g.
+`"Gi0/0"`), matched as a case-insensitive *substring* search against the
 node's *available* (unconnected) ethernet interface names, or omit
 entirely to match every available interface. There's no
 auto-pick-the-first-available default — a specific interface always has
@@ -388,6 +388,31 @@ confirmed data here on whether the `PUT` endpoint's index space covers
 serial too, so rather than guess, serial isn't supported by name/search
 (an explicit numeric index is still passed straight through either way,
 for anyone who knows the right value).
+
+An actual `int` (not a numeric *string*) is also accepted and used
+directly as a literal 0-based index, bypassing name matching entirely —
+see the next paragraph for why a digit-only string is deliberately
+*not* treated the same way.
+
+**A digit-only string used to be silently treated as a literal index too
+— reported live, from real tool-call logs showing an agent connecting the
+wrong interface.** Real interface names are almost always a mix of
+letters and digits (`Gi0/0`, `eth0`, `Serial0/0`...), and some AI agents
+were dropping the letters when formatting the argument — sending `"0"`
+instead of `"Gi0/0"`. Since a digit-only string used to resolve exactly
+like a true `int` index, that typo silently connected whatever happened
+to sit at that array position — possibly a completely different
+interface, and (worse) potentially one already connected to something,
+since the literal-index path bypasses the "available only" restriction
+every other input gets. A digit-only string is no longer treated as an
+index: it now goes through the same name-substring search as any other
+text, so it either still resolves correctly (when the surviving digits
+happen to be a unique substring) or fails safely with a
+`selection_required` prompt listing the real names when it's ambiguous —
+never a silent wrong connection. A true `int` keeps working exactly as
+before; it's the one unambiguous, deliberate way to target a position
+(including an already-connected one), precisely because nothing produces
+that *type* by accident the way a model mangles a string.
 
 **An explicit index can point at an interface that's already connected to
 something — the search/omitted paths can't, by construction, since both

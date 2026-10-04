@@ -918,17 +918,54 @@ def test_resolve_interface_selection_explicit_int_out_of_range() -> None:
     assert "out of range" in result["message"]
 
 
-def test_resolve_interface_selection_digit_string_treated_as_literal_index() -> None:
+def test_resolve_interface_selection_digit_string_is_a_name_search_not_an_index() -> None:
+    # Regression test: a digit-only STRING must NOT be treated as a
+    # literal index (unlike a true int, tested above) -- it's far more
+    # likely to be a model's mangled interface name (e.g. "Gi0/0" with the
+    # "Gi0/" dropped) than a deliberate position. Here it still resolves
+    # correctly, because "1" happens to be a unique substring -- but via
+    # name search, landing on eth1 by matching its name, not by treating
+    # "1" as "array position 1" (which would be the same answer here by
+    # coincidence, so this alone doesn't prove the fix -- see the
+    # ambiguous-match test below for that).
     data = {"ethernet": [{"name": "eth0"}, {"name": "eth1"}]}
     result = nodes._resolve_interface_selection(data, "1", "")
     assert result == {"index": 1}
 
 
-def test_resolve_interface_selection_digit_string_out_of_range() -> None:
+def test_resolve_interface_selection_digit_string_out_of_range_is_now_a_name_search_miss() -> None:
     data = {"ethernet": [{"name": "eth0"}]}
     result = nodes._resolve_interface_selection(data, "5", "")
     assert result["status"] == "error"
-    assert "out of range" in result["message"]
+    # No "5" substring anywhere in "eth0" -- a plain no-match error, not
+    # the old "out of range" index message.
+    assert "out of range" not in result["message"]
+    assert "no available ethernet interface" in result["message"]
+
+
+def test_resolve_interface_selection_mangled_name_is_caught_as_ambiguous_not_silently_wrong() -> None:
+    # The actual reported bug, reproduced directly: an agent means
+    # "Gi0/0" but sends just "0" (dropped the "Gi0/" prefix). Every
+    # interface here contains "0" in its name, so the old behavior
+    # (digit-only string -> literal index 0) would have silently resolved
+    # to whichever interface happens to sit at position 0 -- right or
+    # wrong, with no way to tell. The fix must surface this as genuinely
+    # ambiguous instead, with the real names, rather than silently picking
+    # one.
+    data = {"ethernet": [{"name": "Gi0/0"}, {"name": "Gi0/1"}, {"name": "Gi0/2"}]}
+    result = nodes._resolve_interface_selection(data, "0", "")
+    assert result["status"] == "selection_required"
+    assert result["data"]["matches"] == ["Gi0/0 (index 0)", "Gi0/1 (index 1)", "Gi0/2 (index 2)"]
+
+
+def test_resolve_interface_selection_true_int_still_bypasses_availability_check() -> None:
+    # Confirms the ONE deliberate way to target an already-connected
+    # interface (re-patching) still works, unaffected by the digit-string
+    # change above -- a true int is unambiguous and never produced by
+    # accident the way a mangled string is.
+    data = {"ethernet": [{"name": "Gi0/0", "network_id": 5}]}
+    result = nodes._resolve_interface_selection(data, 0, "")
+    assert result == {"index": 0}
 
 
 def test_resolve_interface_selection_no_available_interfaces_errors() -> None:
