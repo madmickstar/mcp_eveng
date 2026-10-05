@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, run_delete_flow
+from ..coordinates import normalize_coordinate
 from ..dependencies import lab_lock
 from ..search import find_by_name_case_insensitive, iter_named_records
 
@@ -36,8 +37,8 @@ async def add_lab_network(
     lab_path: str,
     network_type: str = "",
     name: str | None = None,
-    left: str | None = None,
-    top: str | None = None,
+    left: str | int | None = None,
+    top: str | int | None = None,
     hideme: int | None = None,
 ) -> dict[str, Any]:
     """Add a network (bridge/cloud/ovs/pnetX) to a lab's canvas.
@@ -115,8 +116,10 @@ async def add_lab_network(
                     "data": {"types": type_names},
                 }
 
-        resolved_left = left if left is not None else "0"
-        resolved_top = top if top is not None else "0"
+        norm_left = normalize_coordinate(left)
+        norm_top = normalize_coordinate(top)
+        resolved_left = norm_left if norm_left is not None else "0"
+        resolved_top = norm_top if norm_top is not None else "0"
         kwargs: dict[str, Any] = {"name": name, "left": resolved_left, "top": resolved_top}
         if hideme is not None:
             kwargs["hideme"] = hideme
@@ -128,8 +131,8 @@ async def edit_lab_network(
     lab_path: str,
     network_id: int,
     name: str | None = None,
-    left: str | None = None,
-    top: str | None = None,
+    left: str | int | None = None,
+    top: str | int | None = None,
     visibility: int | None = None,
     hideme: int | None = None,
     style: str | None = None,
@@ -150,8 +153,8 @@ async def edit_lab_network(
             k: v
             for k, v in {
                 "name": name,
-                "left": left,
-                "top": top,
+                "left": normalize_coordinate(left),
+                "top": normalize_coordinate(top),
                 "visibility": visibility,
                 "hideme": hideme,
                 "style": style,
@@ -256,8 +259,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             lab_path: str,
             network_type: str = "",
             name: str | None = None,
-            left: str | None = None,
-            top: str | None = None,
+            left: str | int | None = None,
+            top: str | int | None = None,
             hideme: int | None = None,
         ) -> dict[str, Any]:
             """Add a network (bridge/cloud/ovs/pnetX) to a lab's canvas.
@@ -278,8 +281,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                     "cloud"/"cloud0"-"cloud9" for pnet0-pnet9, or omit to
                     be shown the list.
                 name: Network display name, default "NetX".
-                left: Canvas position from the left. Numeric string, e.g. "380".
-                top: Canvas position from the top. Numeric string, e.g. "153".
+                left: Canvas position from the left. Integer or numeric string, e.g. 380 or "380".
+                top: Canvas position from the top. Integer or numeric string, e.g. 153 or "153".
                 hideme: 0 (default) renders as its own icon; 1 hides it.
                     Note: not what makes a node-to-node connect_interface
                     bridge render as a direct line -- that's `visibility`,
@@ -296,8 +299,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             lab_path: str,
             network_id: int,
             name: str | None = None,
-            left: str | None = None,
-            top: str | None = None,
+            left: str | int | None = None,
+            top: str | int | None = None,
             visibility: int | None = None,
             hideme: int | None = None,
             style: str | None = None,
@@ -318,8 +321,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 lab_path: Full path to the .unl lab file.
                 network_id: Id of the network to edit (see list_lab_networks).
                 name: New name, if changing.
-                left: New canvas position from the left, if changing.
-                top: New canvas position from the top, if changing.
+                left: New canvas position from the left (integer or numeric string), if changing.
+                top: New canvas position from the top (integer or numeric string), if changing.
                 visibility: 0/1, if changing. This is what actually makes
                     a node-to-node bridge render as a direct line, but
                     only when set *after* the network is created and wired

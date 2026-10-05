@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-10-05
+
+### Fixed
+- **`left`/`top` canvas coordinates sent as integers were rejected by
+  `add_lab_node`, `add_lab_network`, `edit_lab_node` and
+  `edit_lab_network`.** The registered tool schemas declared both
+  parameters as `str`, so when an AI agent sent a plain integer (e.g.
+  `"left": 77`) pydantic refused the call before any tool code ran
+  (`Input should be a valid string [type=string_type, input_value=77,
+  input_type=int]`). Several agents ignored that error and repeated the
+  identical call. Both parameters now accept an integer or a string; an
+  integer is converted to the string EVE-NG's API expects (`77` ->
+  `"77"`), and strings are passed through unchanged (`"380"`, `"35%"`).
+  A boolean is rejected explicitly rather than silently becoming
+  `"True"`. Conversion lives in the new `mcp_eveng/coordinates.py`
+  (`normalize_coordinate`) and is applied in the tool functions
+  themselves, so it covers both the MCP path and direct callers. Added
+  tests, including ones that call the *registered* tools through FastMCP
+  with the exact arguments from the production logs (confirmed they fail
+  against the old signatures).
+
 ## [0.8.5] - 2026-10-02
 
 ### Fixed

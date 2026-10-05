@@ -236,6 +236,14 @@ already there. You can still override either `left` or `top` with an
 exact position, which skips auto-placement (and the extra `list_lab_nodes`
 call it would otherwise make) entirely.
 
+**`left`/`top` accept an integer or a string** on `add_lab_node`,
+`edit_lab_node`, `add_lab_network` and `edit_lab_network` (`100` and
+`"100"` are equivalent). EVE-NG's API wants strings, so an integer is
+converted before it's sent; strings (including percentages such as
+`"35%"`) pass through untouched. Previously the schema declared `str` only
+and an agent sending `100` got a pydantic validation error it often
+retried unchanged. Booleans are rejected.
+
 **`edit_lab_node(lab_path, node_id, ...)` edits an existing node by id**
 (not a name search, unlike `delete_lab_node` — editing is inherently about
 one specific node you already know the id of, e.g. from `list_lab_nodes`).

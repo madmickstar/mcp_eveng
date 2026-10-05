@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
+from ..coordinates import normalize_coordinate
 from ..dependencies import lab_lock
 from ..edition import is_pro_edition
 from ..search import find_by_name_case_insensitive, iter_named_records
@@ -278,8 +279,8 @@ async def add_lab_node(
     name: str | None = None,
     image: str | None = None,
     config: str = "Unconfigured",
-    left: str | None = None,
-    top: str | None = None,
+    left: str | int | None = None,
+    top: str | int | None = None,
     ram: int | None = None,
     console: str | None = None,
     cpu: int | None = None,
@@ -411,8 +412,8 @@ async def add_lab_node(
         # never forward a bare None here, or it overrides that client-side
         # default with an explicit null. When the caller didn't give an
         # explicit position, auto-place instead of just defaulting to "0","0".
-        resolved_left = left
-        resolved_top = top
+        resolved_left = normalize_coordinate(left)
+        resolved_top = normalize_coordinate(top)
         if resolved_left is None or resolved_top is None:
             auto_left, auto_top = await _next_free_position(client, lab_path)
             if resolved_left is None:
@@ -591,8 +592,8 @@ async def edit_lab_node(
     ethernet: int | None = None,
     console: str | None = None,
     config: str | None = None,
-    left: str | None = None,
-    top: str | None = None,
+    left: str | int | None = None,
+    top: str | int | None = None,
     delay: int | None = None,
     disable_offload: int | None = None,
     sat: str | None = None,
@@ -650,8 +651,8 @@ async def edit_lab_node(
                 "ethernet": ethernet,
                 "console": console,
                 "config": config,
-                "left": left,
-                "top": top,
+                "left": normalize_coordinate(left),
+                "top": normalize_coordinate(top),
                 "delay": delay,
                 "disable_offload": disable_offload,
                 "sat": sat,
@@ -2055,8 +2056,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             name: str | None = None,
             image: str | None = None,
             config: str = "Unconfigured",
-            left: str | None = None,
-            top: str | None = None,
+            left: str | int | None = None,
+            top: str | int | None = None,
             ram: int | None = None,
             console: str | None = None,
             cpu: int | None = None,
@@ -2097,8 +2098,10 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 image: Image filename from `get_node_template`. Required if the
                     template has more than one image; auto-filled if it has exactly one.
                 config: "Unconfigured" or "Saved".
-                left: Exact canvas position from the left, e.g. "100". Auto-placed if omitted.
-                top: Exact canvas position from the top, e.g. "100". Auto-placed if omitted.
+                left: Exact canvas position from the left, integer or numeric string
+                    (e.g. 100 or "100"). Auto-placed if omitted.
+                top: Exact canvas position from the top, integer or numeric string
+                    (e.g. 100 or "100"). Auto-placed if omitted.
                 ram: RAM in MB. Defaults to the template's default.
                 console: "telnet" or "vnc". Defaults to the template's default.
                 cpu: Number of vCPUs. Defaults to the template's default.
@@ -2158,8 +2161,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             ethernet: int | None = None,
             console: str | None = None,
             config: str | None = None,
-            left: str | None = None,
-            top: str | None = None,
+            left: str | int | None = None,
+            top: str | int | None = None,
             delay: int | None = None,
             disable_offload: int | None = None,
             sat: str | None = None,
@@ -2217,8 +2220,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 ethernet: New ethernet interface count, if changing.
                 console: New console type ("telnet"/"vnc"/"rdp"/"rdp-tls"), if changing.
                 config: New config state ("Unconfigured"/"Saved"), if changing.
-                left: New canvas position from the left, if changing.
-                top: New canvas position from the top, if changing.
+                left: New canvas position from the left (integer or numeric string), if changing.
+                top: New canvas position from the top (integer or numeric string), if changing.
                 delay: New startup delay in seconds, if changing.
                 disable_offload: New disable-offload toggle (0/1), if changing.
                 sat: New satellite setting, if changing.
