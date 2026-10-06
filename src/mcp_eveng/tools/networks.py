@@ -40,6 +40,7 @@ async def add_lab_network(
     left: str | int | None = None,
     top: str | int | None = None,
     hideme: int | None = None,
+    icon: str | None = None,
 ) -> dict[str, Any]:
     """Add a network (bridge/cloud/ovs/pnetX) to a lab's canvas.
 
@@ -73,6 +74,15 @@ async def add_lab_network(
     (confirmed against a working reference implementation, after setting
     `hideme` at creation time was tried first and confirmed live not to
     produce a direct line -- no cable rendered at all instead).
+
+    Caveat on `hideme`: a Community server tested live (2026-10-05) never
+    stored it -- the saved network had no `hideme` attribute and still
+    rendered visibly. It is sent regardless (it may persist on other
+    versions), but don't rely on it having taken effect.
+
+    `icon` is the icon filename shown for the network. Valid names are the
+    `icons` list returned by `list_network_types` (a different catalogue
+    from node icons). Omit it to keep EVE-NG's default cloud icon.
     """
     async with lab_lock(lab_path):
         if not network_type.strip():
@@ -123,7 +133,50 @@ async def add_lab_network(
         kwargs: dict[str, Any] = {"name": name, "left": resolved_left, "top": resolved_top}
         if hideme is not None:
             kwargs["hideme"] = hideme
+        if icon is not None:
+            kwargs["icon"] = icon
         return await client.add_lab_network(lab_path, resolved_network_type, **kwargs)
+
+
+# -- EVE-NG bug workaround: a network edit that flips nothing returns 500 -----
+# -- and strands the lab lock --------------------------------------------------
+#
+# Confirmed live (2026-10-05, Community server, raw <network> XML checked on
+# the host): EVE-NG's network-edit handler only treats `name`, `left`, `top`
+# (and `visibility`) as changes. A PUT containing ONLY `icon`, `style`,
+# `color`, `label` and/or `hideme` changes nothing as far as EVE-NG is
+# concerned, so it ends in an unhandled path: HTTP 500 with no JSON body,
+# and EVE-NG's server-side lab lock file is never released (every later
+# write to that lab then fails until the `.lock` file is removed by hand on
+# the EVE-NG host). Same mechanism as the node `delay` workaround in
+# tools/nodes.py (`_with_delay_workaround`).
+#
+# Workaround: when the payload holds only such fields, pad it with the
+# network's own current `name` (value-blind -- resending the same name
+# counts as a change). Applied to the raw API payload only.
+
+_NETWORK_NO_FLAG_FIELDS = {"icon", "style", "color", "label", "hideme"}
+_NETWORK_FLAG_FIELDS = {"name", "left", "top"}
+
+
+def _network_edit_needs_padding(fields: dict[str, Any]) -> bool:
+    return bool(_NETWORK_NO_FLAG_FIELDS & fields.keys()) and not (_NETWORK_FLAG_FIELDS & fields.keys())
+
+
+def _extract_network_record(data: Any, network_id: int) -> dict[str, Any] | None:
+    """Pull one network's record out of a `list_lab_networks` response.
+
+    A single-id GET returns the record itself; a full listing is keyed by
+    id. Handle both rather than assume which one EVE-NG sends.
+    """
+    if not isinstance(data, dict):
+        return None
+    keyed = data.get(str(network_id))
+    if isinstance(keyed, dict):
+        return keyed
+    if "name" in data:
+        return data
+    return None
 
 
 async def edit_lab_network(
@@ -147,6 +200,13 @@ async def edit_lab_network(
     node-to-node bridge after wiring it -- confirmed (against a working
     reference implementation) to be a required separate step after
     creation and wiring, not something set at creation time.
+
+    `style`, `color`, `label` and `hideme` are sent but were not stored by
+    a Community server tested live (2026-10-05); `name`, `left`, `top`,
+    `visibility` and `icon` were. A payload holding only icon/style/color/
+    label/hideme is padded with the network's current `name` (see
+    `_network_edit_needs_padding`); if the network can't be found, nothing
+    is sent.
     """
     async with lab_lock(lab_path):
         fields = {
@@ -169,7 +229,23 @@ async def edit_lab_network(
                 "status": "error",
                 "message": "At least one field to change is required; none was supplied.",
             }
-        return await client.edit_lab_network(lab_path, network_id, **fields)
+        api_fields = fields
+        if _network_edit_needs_padding(fields):
+            current = await client.list_lab_networks(lab_path, network_id)
+            record = _extract_network_record(current.get("data"), network_id)
+            if record is None or "name" not in record:
+                # Never send the unpadded edit: it would 500 and strand the
+                # lab's server-side lock. Never pad with a guessed/empty
+                # name either -- that would rename the network.
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Network {network_id} was not found in {lab_path} (or has no name), "
+                        "so nothing was sent. Check the id with list_lab_networks."
+                    ),
+                }
+            api_fields = {**fields, "name": str(record["name"])}
+        return await client.edit_lab_network(lab_path, network_id, **api_fields)
 
 
 def _network_id(network: dict[str, Any]) -> int:
@@ -262,6 +338,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             left: str | int | None = None,
             top: str | int | None = None,
             hideme: int | None = None,
+            icon: str | None = None,
         ) -> dict[str, Any]:
             """Add a network (bridge/cloud/ovs/pnetX) to a lab's canvas.
 
@@ -284,12 +361,24 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 left: Canvas position from the left. Integer or numeric string, e.g. 380 or "380".
                 top: Canvas position from the top. Integer or numeric string, e.g. 153 or "153".
                 hideme: 0 (default) renders as its own icon; 1 hides it.
-                    Note: not what makes a node-to-node connect_interface
+                    Sent to EVE-NG, but a Community server tested live did
+                    not store it (network stayed visible) -- don't rely on
+                    it. Not what makes a node-to-node connect_interface
                     bridge render as a direct line -- that's `visibility`,
                     set separately after wiring, not something you set here.
+                icon: Icon filename for the network, from the `icons` list
+                    in `list_network_types` (network icons are a different
+                    set from node icons). Omit for the default cloud icon.
             """
             return await add_lab_network(
-                await get_client(), lab_path, network_type, name=name, left=left, top=top, hideme=hideme
+                await get_client(),
+                lab_path,
+                network_type,
+                name=name,
+                left=left,
+                top=top,
+                hideme=hideme,
+                icon=icon,
             )
 
     if enabled("edit_lab_network"):
@@ -327,12 +416,24 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                     a node-to-node bridge render as a direct line, but
                     only when set *after* the network is created and wired
                     -- not at creation time.
-                hideme: 0/1, if changing -- whether the network shows its
-                    own icon at all.
-                style: Line style, if changing (e.g. "Solid").
-                icon: Icon filename, if changing.
-                color: Line color, if changing.
-                label: Text label, if changing.
+                hideme: 0/1, if changing. NOT PERSISTED on the Community
+                    server tested live -- accepted, but silently ignored.
+                icon: Icon filename, if changing. Must be one of the
+                    `icons` returned by `list_network_types` (network icons
+                    differ from node icons). Persists and renders.
+                style: Line style, if changing. NOT PERSISTED on the
+                    Community server tested live -- silently ignored.
+                color: Line color, if changing. NOT PERSISTED on the
+                    Community server tested live -- silently ignored.
+                label: Text label, if changing. NOT PERSISTED on the
+                    Community server tested live -- silently ignored.
+
+            Only `name`, `left`, `top`, `visibility` and `icon` were
+            confirmed to actually be saved. If you send only
+            icon/style/color/label/hideme, the current `name` is added to
+            the request automatically (EVE-NG otherwise fails with a 500
+            and leaves the lab locked). To verify a change took effect,
+            re-read it with `list_lab_networks`.
             """
             return await edit_lab_network(
                 await get_client(),

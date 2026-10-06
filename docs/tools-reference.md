@@ -472,8 +472,10 @@ now sends all of them, with the GUI's own observed defaults.
 actually appear before wiring to it (`_wait_for_network_ready`), kept as a
 defensive check for genuine propagation delay independent of this.
 
-`hideme` (`0`/`1`) does control whether a network shows its own icon —
-that part held up. What *doesn't* is using it to make a node-to-node
+`hideme` (`0`/`1`) was believed to control whether a network shows its
+own icon, and held up on an earlier server — but a Community server
+retested on 2026-10-05 did **not** store it (see "Network edits" below),
+so treat it as best-effort. It also can't be used to make a node-to-node
 bridge render as a direct line, which was this project's original theory
 and turned out to be wrong: confirmed live, it produced no visible cable
 at all rather than a direct one. The field that actually does this is
@@ -504,6 +506,37 @@ counterpart to `add_lab_network`, same pattern as `edit_lab`/`edit_lab_node`
 — only supplied fields are changed. This is what `connect_interface` uses
 internally to set `visibility=0` after wiring a node-to-node bridge; call
 it directly for anything else you want to change on an existing network.
+
+**Network edits — what EVE-NG actually saves, and the lock-strand
+workaround (confirmed live 2026-10-05 against a Community server, by
+comparing tool calls with the raw `<network>` XML on the EVE-NG host).**
+Only `name`, `left`, `top`, `visibility` and `icon` are stored. `style`,
+`color`, `label` and `hideme` (and, on create, `width`, `linkstyle`,
+`native_vlan`, `smart`, `pnet_out`) are accepted by the API but silently
+discarded — the tools still send them (other EVE-NG versions may keep
+them), but a "success" response does not mean they took effect; re-read
+with `list_lab_networks` to check.
+
+Worse, a PUT whose payload contains **only** `icon`/`style`/`color`/
+`label`/`hideme` flips none of EVE-NG's internal "modified" flags and ends
+in an unhandled server path: HTTP 500 with no JSON body, **and EVE-NG's
+server-side lab lock file is never released**, so every later write to
+that lab fails until `find /opt/unetlab/labs/ -name '*.lock' -exec rm {} \;`
+is run on the EVE-NG host. `edit_lab_network` now avoids this the same way
+`edit_lab_node` handles a delay-only edit: such a payload is padded with the
+network's own current `name` (a value-blind field that always counts as a
+change). If the network id doesn't exist, nothing is sent at all.
+
+`add_lab_network` and `edit_lab_network` both take `icon`. Valid network
+icon names are the `icons` list in `list_network_types`'s response — a
+different catalogue from node icons (icons seen on nodes, such as
+`Router-2D-Cat-Green-S.svg`, are not necessarily valid for networks).
+
+Not done: automatically releasing a stranded lock through the API. The
+stranded lock is a `.lock` file on the EVE-NG host; `get_lab`'s `lock`
+field (the lab file's GUI-editing attribute) read `0` during every
+observed strand, so it is a different thing, and no EVE-NG API endpoint
+that releases the file lock has been confirmed.
 
 **`start_node`/`stop_node`, when `node_id` is omitted (every node in the
 lab), loop through each node individually rather than using EVE-NG's bulk

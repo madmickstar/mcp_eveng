@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-06
+
+Minor bump: adds a new `icon` parameter to `add_lab_network`, alongside the
+fixes below. Found by a live defect report (2026-10-05, Community server,
+tool calls compared with raw `<network>` XML on the EVE-NG host).
+
+### Fixed
+- **`edit_lab_network` with only `icon`/`style`/`color`/`label`/`hideme`
+  returned a raw HTTP 500 and stranded EVE-NG's server-side lab lock.**
+  EVE-NG's network-edit handler only counts `name`, `left`, `top` (and
+  `visibility`) as changes; a payload with none of them ends in an
+  unhandled path, and the lab's `.lock` file is never released, so every
+  later write to that lab failed until the file was deleted by hand on the
+  EVE-NG host. Same mechanism as the node `delay`-only workaround
+  (`_with_delay_workaround`): such payloads are now padded with the
+  network's own current `name`. The extra read only happens when padding
+  is needed, and runs inside the per-lab lock. If the network id doesn't
+  exist nothing is sent at all (an unpadded PUT would 500, and padding
+  with a blank name would rename it).
+
+### Added
+- `add_lab_network` accepts `icon` (valid names: the `icons` list from
+  `list_network_types`). Omitted -> EVE-NG's default cloud icon, as before.
+
+### Changed (documentation only)
+- Tool docstrings and `docs/tools-reference.md` no longer imply that
+  `style`, `color`, `label` and `hideme` take effect. On the server tested
+  they were accepted and silently discarded (saved XML held only `type`,
+  `name`, `left`, `top`, `visibility`, `icon`; create-time `hideme=1` was
+  also dropped). They are still sent -- other EVE-NG versions may keep
+  them -- but the docs say not to rely on them and to verify with
+  `list_lab_networks`. Corrected the earlier "`hideme` confirmed live" claims.
+
+### Not changed
+- No automatic API "unlock" after a failed write. The stranded lock is a
+  `.lock` file on the EVE-NG host; `get_lab`'s `lock` field (the lab file's
+  GUI-editing attribute) read `0` during every strand, and no endpoint that
+  releases the file lock is confirmed. Calling an unverified unlock
+  endpoint could instead unlock a lab the user locked on purpose.
+- `list_lab_networks` is not changed: it already returns EVE-NG's response
+  verbatim, so there was nothing to "echo" for fields EVE-NG never stores.
+
 ## [0.8.6] - 2026-10-05
 
 ### Fixed

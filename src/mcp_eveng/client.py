@@ -510,6 +510,14 @@ class EvengClient:
         as its own icon or as an invisible direct line -- NOT `visibility`
         (both of the GUI's own comparison networks had `visibility: 1`,
         differing only in `hideme`).
+
+        Caveat (2026-10-05, Community server): a network created with
+        `hideme=1` had no `hideme` attribute in the saved XML and still
+        rendered visibly -- this server version appears to discard
+        `style`, `width`, `linkstyle`, `color`, `label`, `hideme`,
+        `native_vlan`, `smart` and `pnet_out` and to store only `type`,
+        `name`, `left`, `top`, `visibility` and `icon`. They are still
+        sent, matching the GUI's own request; other versions may keep them.
         """
         payload: JsonDict = {
             "type": network_type,
