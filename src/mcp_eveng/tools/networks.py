@@ -179,6 +179,31 @@ def _extract_network_record(data: Any, network_id: int) -> dict[str, Any] | None
     return None
 
 
+# -- EVE-NG bug: hiding an unwired network silently DELETES it -----------------
+#
+# Confirmed live (2026-10-06, Community server, reproduced 3x): setting
+# `visibility=0` on a network with nothing attached (`count` 0) makes EVE-NG
+# remove the network from the lab during the save, yet it still answers
+# 201 "Lab has been saved" -- silent data loss. Padding with `name` does not
+# prevent it. A network with at least one attached endpoint keeps
+# `visibility=0` correctly. `connect_interface` is unaffected: it wires
+# both endpoints first and calls the client directly, bypassing this tool.
+# So the public `edit_lab_network` refuses the call up front.
+
+
+def _is_hide_request(fields: dict[str, Any]) -> bool:
+    value = fields.get("visibility")
+    return value is not None and str(value).strip() == "0"
+
+
+def _attached_endpoints(record: dict[str, Any]) -> int | None:
+    """The network's `count` of attached endpoints, or None if unknown."""
+    try:
+        return int(record["count"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 async def edit_lab_network(
     client: EvengClient,
     lab_path: str,
@@ -207,6 +232,10 @@ async def edit_lab_network(
     label/hideme is padded with the network's current `name` (see
     `_network_edit_needs_padding`); if the network can't be found, nothing
     is sent.
+
+    `visibility=0` is refused unless the network has at least one attached
+    endpoint (`count` >= 1): EVE-NG silently deletes a network that is
+    hidden while nothing is attached, while reporting success.
     """
     async with lab_lock(lab_path):
         fields = {
@@ -230,10 +259,34 @@ async def edit_lab_network(
                 "message": "At least one field to change is required; none was supplied.",
             }
         api_fields = fields
-        if _network_edit_needs_padding(fields):
+        hiding = _is_hide_request(fields)
+        needs_padding = _network_edit_needs_padding(fields)
+        if hiding or needs_padding:
             current = await client.list_lab_networks(lab_path, network_id)
             record = _extract_network_record(current.get("data"), network_id)
-            if record is None or "name" not in record:
+            if hiding:
+                if record is None:
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Network {network_id} was not found in {lab_path}, so nothing was sent. "
+                            "Check the id with list_lab_networks."
+                        ),
+                    }
+                attached = _attached_endpoints(record)
+                if attached is None or attached < 1:
+                    state = "has nothing attached" if attached == 0 else "has no readable endpoint count"
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"Refusing visibility=0 on network {network_id} ({record.get('name', '?')}): it {state}, "
+                            "and EVE-NG silently DELETES a network that is set invisible while nothing is "
+                            "attached to it (while still reporting success). Nothing was sent. Wire at least "
+                            "one node interface to it first (see connect_interface), then hide it; or leave "
+                            "it visible (visibility=1)."
+                        ),
+                    }
+            if needs_padding and (record is None or "name" not in record):
                 # Never send the unpadded edit: it would 500 and strand the
                 # lab's server-side lock. Never pad with a guessed/empty
                 # name either -- that would rename the network.
@@ -244,7 +297,8 @@ async def edit_lab_network(
                         "so nothing was sent. Check the id with list_lab_networks."
                     ),
                 }
-            api_fields = {**fields, "name": str(record["name"])}
+            if needs_padding and record is not None:
+                api_fields = {**fields, "name": str(record["name"])}
         return await client.edit_lab_network(lab_path, network_id, **api_fields)
 
 
@@ -415,7 +469,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 visibility: 0/1, if changing. This is what actually makes
                     a node-to-node bridge render as a direct line, but
                     only when set *after* the network is created and wired
-                    -- not at creation time.
+                    -- not at creation time. 0 is REFUSED while the network
+                    has nothing attached: EVE-NG would silently delete it.
                 hideme: 0/1, if changing. NOT PERSISTED on the Community
                     server tested live -- accepted, but silently ignored.
                 icon: Icon filename, if changing. Must be one of the

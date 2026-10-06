@@ -65,7 +65,7 @@ async def test_padding_works_when_listing_is_keyed_by_id() -> None:
         {"top": "7"},
         {"name": "net2", "icon": "Cloud-2D-Blue-S.svg"},
         {"left": 1, "label": "x"},
-        {"visibility": 0},  # production path (connect_interface): worked unpadded
+        {"visibility": 1},  # visibility flips the flag on its own: no padding needed
     ],
 )
 async def test_payload_that_already_flips_the_flag_is_not_padded_and_costs_no_extra_read(
@@ -83,10 +83,10 @@ async def test_payload_that_already_flips_the_flag_is_not_padded_and_costs_no_ex
 async def test_padding_does_not_change_other_caller_supplied_fields() -> None:
     client = _client(RECORD)
 
-    await networks.edit_lab_network(client, LAB, 1, icon="Cloud-2D-Blue-S.svg", visibility=0)
+    await networks.edit_lab_network(client, LAB, 1, icon="Cloud-2D-Blue-S.svg", visibility=1)
 
     sent = client.edit_lab_network.await_args.kwargs
-    assert sent == {"icon": "Cloud-2D-Blue-S.svg", "visibility": 0, "name": "net2"}
+    assert sent == {"icon": "Cloud-2D-Blue-S.svg", "visibility": 1, "name": "net2"}
 
 
 @pytest.mark.parametrize("data", [{}, None, [], {"1": "not-a-dict"}, {"id": 1, "type": "bridge"}])
@@ -185,3 +185,89 @@ async def test_registered_add_lab_network_accepts_icon() -> None:
     kwargs = client.add_lab_network.await_args.kwargs
     assert kwargs["icon"] == "Cloud-2D-Blue-S.svg"
     assert kwargs["left"] == "10"
+
+
+# -- visibility=0 on an unwired network silently deletes it (EVE-NG) ------------
+
+WIRED = {**RECORD, "count": 1}
+UNWIRED = {**RECORD, "count": 0}
+
+
+@pytest.mark.parametrize("hide", [0, "0"])
+async def test_hiding_an_unwired_network_is_refused_and_nothing_is_sent(hide: Any) -> None:
+    client = _client(UNWIRED)
+
+    result = await networks.edit_lab_network(client, LAB, 1, visibility=hide)
+
+    assert result["status"] == "error"
+    assert "nothing attached" in result["message"]
+    assert "DELETES" in result["message"]
+    client.edit_lab_network.assert_not_awaited()
+
+
+async def test_hiding_with_name_padding_is_still_refused_when_unwired() -> None:
+    # Live: edit(name="net6", visibility=0) on an unwired bridge still deleted it.
+    client = _client(UNWIRED)
+
+    result = await networks.edit_lab_network(client, LAB, 1, name="net6", visibility=0)
+
+    assert result["status"] == "error"
+    client.edit_lab_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize("count", [1, 2, "1", "2"])
+async def test_hiding_a_wired_network_is_allowed_and_sent_unpadded(count: Any) -> None:
+    client = _client({**RECORD, "count": count})
+
+    result = await networks.edit_lab_network(client, LAB, 1, visibility=0)
+
+    assert result["status"] == "success"
+    client.edit_lab_network.assert_awaited_once_with(LAB, 1, visibility=0)  # no stray `name`
+
+
+@pytest.mark.parametrize("record", [RECORD, {**RECORD, "count": None}, {**RECORD, "count": "n/a"}])
+async def test_hiding_with_unknown_endpoint_count_fails_closed(record: dict[str, Any]) -> None:
+    client = _client(record)
+
+    result = await networks.edit_lab_network(client, LAB, 1, visibility=0)
+
+    assert result["status"] == "error"
+    assert "no readable endpoint count" in result["message"]
+    client.edit_lab_network.assert_not_awaited()
+
+
+async def test_hiding_an_unknown_network_sends_nothing() -> None:
+    client = _client({})
+
+    result = await networks.edit_lab_network(client, LAB, 9, visibility=0)
+
+    assert result["status"] == "error"
+    assert "9" in result["message"]
+    client.edit_lab_network.assert_not_awaited()
+
+
+async def test_showing_an_unwired_network_needs_no_read_and_is_sent() -> None:
+    # Live: visibility=1 on an unwired bridge survives.
+    client = _client(UNWIRED)
+
+    await networks.edit_lab_network(client, LAB, 1, visibility=1)
+
+    client.list_lab_networks.assert_not_awaited()
+    client.edit_lab_network.assert_awaited_once_with(LAB, 1, visibility=1)
+
+
+async def test_hide_plus_icon_reads_once_and_pads_once() -> None:
+    client = _client(WIRED)
+
+    await networks.edit_lab_network(client, LAB, 1, visibility=0, icon="Cloud-2D-Blue-S.svg")
+
+    client.list_lab_networks.assert_awaited_once()
+    client.edit_lab_network.assert_awaited_once_with(LAB, 1, visibility=0, icon="Cloud-2D-Blue-S.svg", name="net2")
+
+
+async def test_registered_edit_lab_network_refuses_hiding_unwired_network() -> None:
+    client = _client(UNWIRED)
+
+    await _server(client).call_tool("edit_lab_network", {"lab_path": LAB, "network_id": 1, "visibility": 0})
+
+    client.edit_lab_network.assert_not_awaited()

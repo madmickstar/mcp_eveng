@@ -532,6 +532,15 @@ icon names are the `icons` list in `list_network_types`'s response — a
 different catalogue from node icons (icons seen on nodes, such as
 `Router-2D-Cat-Green-S.svg`, are not necessarily valid for networks).
 
+**`visibility=0` on an unwired network deletes it.** Confirmed live: if a
+network has nothing attached (`count` 0), setting `visibility=0` makes
+EVE-NG remove it during the save while still reporting success (name
+padding doesn't help; `visibility=1` is safe; a network with at least one
+attached endpoint hides correctly). `edit_lab_network` therefore refuses
+`visibility=0` unless the network's `count` is at least 1, and sends
+nothing. To hide a bridge, wire something to it first.
+`connect_interface` already does it in that order.
+
 Not done: automatically releasing a stranded lock through the API. The
 stranded lock is a `.lock` file on the EVE-NG host; `get_lab`'s `lock`
 field (the lab file's GUI-editing attribute) read `0` during every

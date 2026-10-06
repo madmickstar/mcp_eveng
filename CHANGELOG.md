@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-06
+
+### Fixed
+- **`edit_lab_network(visibility=0)` on a network with nothing attached
+  silently deleted the network.** Confirmed live (Community server,
+  reproduced 3x): EVE-NG removes an endpoint-less network when it is set
+  invisible, yet still answers 201 "Lab has been saved". Adding a `name`
+  pad did not prevent it; `visibility=1` on an unwired network and
+  `visibility=0` on a network with at least one attached endpoint are both
+  fine. The tool now reads the network first and refuses `visibility=0`
+  unless its `count` is >= 1 (also refuses if `count` is unreadable --
+  fails closed, since the failure is silent data loss), sending nothing
+  and explaining why. `connect_interface` is unaffected: it wires both ends
+  first and calls the client directly. The read is shared with the
+  name-padding read, so a combined edit still costs one GET; edits that
+  don't hide anything are unchanged.
+
 ## [0.9.0] - 2026-10-06
 
 Minor bump: adds a new `icon` parameter to `add_lab_network`, alongside the

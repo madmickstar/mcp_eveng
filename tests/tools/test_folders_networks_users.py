@@ -292,7 +292,11 @@ async def test_edit_lab_network_requires_at_least_one_field() -> None:
 
 
 async def test_edit_lab_network_forwards_only_supplied_fields() -> None:
-    client = make_client(edit_lab_network={"status": "success"})
+    # visibility=0 is only allowed on a network with something attached (count >= 1).
+    client = make_client(
+        edit_lab_network={"status": "success"},
+        list_lab_networks={"status": "success", "data": {"id": 7, "name": "n", "count": 1}},
+    )
 
     await networks.edit_lab_network(client, "/User1/Lab 1.unl", 7, visibility=0)
 
