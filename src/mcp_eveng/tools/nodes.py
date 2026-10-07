@@ -511,40 +511,69 @@ async def delete_lab_node(
         )
 
 
-# -- EVE-NG Community bug workaround: a delay-only edit is silently -----
-# rejected -----------------------------------------------------------------
+# -- EVE-NG bug workaround: an edit that flips nothing is rejected (20026) ----
 #
-# Confirmed live against a Community server: EVE-NG's own node-edit code
-# (Node::edit() in the underlying unetlab source) sets an internal
-# "modified" flag for every editable field it changes -- config, icon,
-# image, left, name, top -- EXCEPT `delay`. The `delay` branch updates the
-# value but never flips that flag. If `delay` is the *only* field in the
-# request, the server ends up thinking nothing changed and rejects the
-# whole edit with its own "no attribute has been changed" error, which
-# surfaces to API callers as a generic "Cannot edit node in the selected
-# lab (20026)" -- indistinguishable, without this context, from a real
-# failure. Not something PRO was observed to hit in this project's testing.
+# EVE-NG's node-edit code (Node::edit() in the underlying unetlab source)
+# keeps an internal "modified" flag and rejects the whole request with
+# "no attribute has been changed", which surfaces to API callers as a
+# generic "Cannot edit node in the selected lab (20026)" -- indistinguishable,
+# without this context, from a real failure.
 #
-# Workaround: whenever `delay` is being changed and nothing else in the
-# request already flips the flag, pad the request with the node's own
-# current `name` (a value-blind field -- EVE-NG sets `modified = True` for
-# `name` unconditionally, regardless of whether the resent value actually
-# differs from the current one). This is transparent to callers: it's
-# applied only to the raw API payload, never reported back as a changed
-# field.
+# Which fields flip that flag was first assumed to be everything except
+# `delay` (config, icon, image, left, name, top). Live testing on EVE-NG
+# 6.2.0-4 (2026-10-06, each field sent bare and then padded) showed that is
+# wrong: ONLY `name`, `left` and `top` flip it. A bare `icon`, `ram`,
+# `config` (or `eth_name`/`eth_format`, ...) edit fails with 20026 exactly
+# like a bare `delay` edit; with a flag-flipping field alongside, it works.
+#
+# Workaround: whenever the request holds none of name/left/top, pad it with
+# the node's own current `name` (a value-blind field -- EVE-NG sets
+# `modified = True` for `name` unconditionally, regardless of whether the
+# resent value differs). Applied to the raw API payload only, never
+# reported back as a changed field. If the current name is unknown the
+# payload is left alone rather than padded with a blank name (which would
+# rename the node).
+#
+# `image` is a separate problem and is not fixed by padding: see
+# `_image_edit_refusal`.
 
-_MODIFIED_FLAG_FIELDS = {"config", "icon", "image", "left", "name", "top"}
+_MODIFIED_FLAG_FIELDS = {"name", "left", "top"}
 
 
-def _with_delay_workaround(fields: dict[str, Any], current_data: dict[str, Any]) -> dict[str, Any]:
+def _with_modified_flag_padding(fields: dict[str, Any], current_data: dict[str, Any]) -> dict[str, Any]:
     """Return `fields` for the actual API call, padded with the node's
-    current `name` if `delay` is present and no other field already
-    guarantees EVE-NG's "modified" flag gets set (see note above)."""
-    if "delay" not in fields:
-        return fields
+    current `name` unless a field that really flips EVE-NG's "modified"
+    flag is already present (see note above)."""
     if _MODIFIED_FLAG_FIELDS & fields.keys():
         return fields
-    return {**fields, "name": str(current_data.get("name", ""))}
+    current_name = current_data.get("name")
+    if current_name is None:
+        return fields
+    return {**fields, "name": str(current_name)}
+
+
+# -- EVE-NG bug: changing a node's image crashes the handler and strands -----
+# -- the lab lock --------------------------------------------------------------
+#
+# Confirmed live (EVE-NG 6.2.0-4): any node edit containing `image` returns
+# HTTP 500 and leaves the server-side lab lock file behind -- even padded
+# with name/left/config, so it is not the modified-flag problem above. A
+# fresh node added with a valid image works, so the supported route to a
+# different image is delete + re-add. The tools refuse before sending.
+
+_IMAGE_EDIT_ADVICE = (
+    "On the EVE-NG version tested (6.2.0-4) any node edit containing `image` fails with an HTTP 500 and "
+    "leaves the lab's server-side lock stranded (every later write to the lab then fails until the .lock "
+    "file is deleted on the EVE-NG host). Nothing was sent and no node was stopped. To use a different image, "
+    "delete the node and re-add it with add_lab_node(image=...)."
+)
+
+
+def _image_edit_refusal(subject: str) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "message": f"Refusing to change the image of {subject}. {_IMAGE_EDIT_ADVICE}",
+    }
 
 
 def _is_running(node_data: dict[str, Any]) -> bool:
@@ -624,6 +653,14 @@ async def edit_lab_node(
     `edit_lab_nodes_by_template`. For `delay` specifically with bulk
     ordering/incrementing across many nodes, see `change_node_delay`.
 
+    Known EVE-NG (6.2.0-4) limits, confirmed live: `image` cannot be
+    changed here -- it is refused up front, because EVE-NG answers with an
+    HTTP 500 and leaves the lab lock stranded; delete the node and re-add
+    it with add_lab_node(image=...) instead. `eth_name`/`eth_format` are
+    accepted but not applied (interfaces keep their template names). Edits
+    holding none of name/left/top are padded with the node's current name,
+    which EVE-NG otherwise rejects as "no attribute has been changed".
+
     EVE-NG requires a node to be stopped to edit it, on **both** PRO and
     Community (unlike `connect_interface`'s wiring, which PRO allows on
     running nodes -- editing fields is different and always needs the node
@@ -697,20 +734,29 @@ async def edit_lab_node(
             current_data = {}
         node_label = str(current_data.get("name", f"id {node_id}"))
 
+        if "image" in fields:
+            return _image_edit_refusal(
+                f"node {node_label!r} (id {node_id}). If you were not changing the image, resend the "
+                "edit without `image`"
+            )
+
         stopped_first = False
         if _is_running(current_data):
             await client.stop_node(lab_path, node_id)
             stopped_first = True
 
-        api_fields = _with_delay_workaround(fields, current_data)
+        api_fields = _with_modified_flag_padding(fields, current_data)
         await client.edit_lab_node(lab_path, node_id, **api_fields)
 
         changed = ", ".join(f"{k}={v!r}" for k, v in fields.items())
         note = " (it was running, so stopped it first)" if stopped_first else ""
-        return {
-            "status": "success",
-            "message": f"Updated node {node_label!r} (id {node_id}){note}: {changed}.",
-        }
+        message = f"Updated node {node_label!r} (id {node_id}){note}: {changed}."
+        if "eth_name" in fields or "eth_format" in fields:
+            message += (
+                " Note: eth_name/eth_format are accepted but were not applied by the EVE-NG version tested "
+                "(6.2.0-4) -- the interfaces kept their template names. Check with get_node_interfaces."
+            )
+        return {"status": "success", "message": message}
 
 
 # -- change_node_delay: single-node or bulk (name-matched or user-ordered) ----
@@ -816,7 +862,7 @@ async def change_node_delay(
 
             if _is_running(current_data):
                 await client.stop_node(lab_path, node_id)
-            api_fields = _with_delay_workaround({"delay": resolved_delay}, current_data)
+            api_fields = _with_modified_flag_padding({"delay": resolved_delay}, current_data)
             await client.edit_lab_node(lab_path, node_id, **api_fields)
             return {
                 "status": "success",
@@ -917,7 +963,7 @@ async def change_node_delay(
             node_name = str(node.get("name", f"id {target_id}"))
             if _is_running(node):
                 await client.stop_node(lab_path, target_id)
-            api_fields = _with_delay_workaround({"delay": new_delay}, node)
+            api_fields = _with_modified_flag_padding({"delay": new_delay}, node)
             await client.edit_lab_node(lab_path, target_id, **api_fields)
             updated.append(f"{node_name} ({new_delay}s)")
 
@@ -1022,23 +1068,6 @@ async def _search_icons(client: EvengClient, search: str) -> list[str]:
     return sorted(name for name in icons if needle in name.lower())
 
 
-async def _search_template_images(client: EvengClient, template_id: str, search: str) -> list[str]:
-    """Find image filenames matching `search` (case-insensitive substring)
-    among the given template's own valid images -- unlike icons, images
-    are template-scoped, not a global catalog, so this reuses
-    `get_node_template` (the same source `add_lab_node` resolves images
-    from) rather than searching everything on the server.
-    """
-    result = await client.get_node_template(template_id)
-    data = result.get("data") or {}
-    options = data.get("options") if isinstance(data, dict) else None
-    if not isinstance(options, dict):
-        return []
-    image_names = _template_image_names(options)
-    needle = search.strip().lower()
-    return sorted(name for name in image_names if needle in name.lower())
-
-
 async def edit_lab_nodes_by_template(
     client: EvengClient,
     lab_path: str,
@@ -1073,10 +1102,10 @@ async def edit_lab_nodes_by_template(
     instead `icon_search` (case-insensitive substring against EVE-NG's
     icon catalog) narrows to exactly one icon, resolving further matches
     via `icon_selection` the same way template matches do. For
-    `component="image"`, `value` also isn't used -- `image_search`
-    (case-insensitive substring against *this resolved template's own*
-    valid images, not a global catalog -- images are template-scoped)
-    narrows the same way, via `image_selection`.
+    `component="image"` is currently REFUSED (EVE-NG 6.2.0-4 answers any
+    node image edit with an HTTP 500 and leaves the lab lock stranded --
+    see `_image_edit_refusal`); `image_search`/`image_selection` are kept
+    for compatibility but unused. Delete and re-add the nodes instead.
 
     Whatever isn't supplied yet is prompted for one piece at a time,
     re-deriving everything fresh from what's currently given -- there's no
@@ -1261,58 +1290,10 @@ async def edit_lab_nodes_by_template(
             change_value_label = resolved_icon
             fields: dict[str, Any] = {"icon": resolved_icon}
         elif normalized_component == "image":
-            resolved_image: str | None = None
-            if not image_search.strip():
-                return {
-                    "status": "selection_required",
-                    "message": (
-                        f"{len(target_nodes)} node(s) selected from {resolved_template_id!r}, "
-                        "changing image.\n\nWhat image are you looking for? Reply with "
-                        "`image_search` -- a fragment of the image filename is enough "
-                        "(only images valid for this template are searched)."
-                    ),
-                    "data": {"matches": target_labels},
-                }
-            image_matches = await _search_template_images(client, resolved_template_id, image_search)
-            if not image_matches:
-                return {
-                    "status": "cancelled",
-                    "message": (f"No image found matching {image_search!r} for template {resolved_template_id!r}."),
-                }
-            if len(image_matches) == 1:
-                resolved_image = image_matches[0]
-            elif image_selection.strip():
-                needle = image_selection.strip().lower()
-                if image_selection.strip().isdigit():
-                    idx = int(image_selection.strip())
-                    if 1 <= idx <= len(image_matches):
-                        resolved_image = image_matches[idx - 1]
-                if resolved_image is None:
-                    exact = [i for i in image_matches if i.lower() == needle]
-                    if len(exact) == 1:
-                        resolved_image = exact[0]
-                if resolved_image is None:
-                    return {
-                        "status": "error",
-                        "message": (
-                            f"Could not match {image_selection!r} to any current image. "
-                            f"Current matches:\n{format_numbered(image_matches)}"
-                        ),
-                        "data": {"matches": image_matches},
-                    }
-            else:
-                return {
-                    "status": "selection_required",
-                    "message": (
-                        f"{len(image_matches)} images match {image_search!r} for template "
-                        f"{resolved_template_id!r}:\n{format_numbered(image_matches)}\n\n"
-                        "Reply with `image_selection` set to the number or exact filename "
-                        "of the one you want."
-                    ),
-                    "data": {"matches": image_matches},
-                }
-            change_value_label = resolved_image
-            fields = {"image": resolved_image}
+            return _image_edit_refusal(
+                f"the {len(target_nodes)} node(s) selected from {resolved_template_id!r} "
+                "(nothing was changed; no search or confirmation is needed)"
+            )
         else:
             if value is None:
                 return {
@@ -1348,7 +1329,7 @@ async def edit_lab_nodes_by_template(
             node_name = str(node.get("name", f"id {target_id}"))
             if _is_running(node):
                 await client.stop_node(lab_path, target_id)
-            await client.edit_lab_node(lab_path, target_id, **fields)
+            await client.edit_lab_node(lab_path, target_id, **_with_modified_flag_padding(fields, node))
             updated.append(node_name)
 
         plural = "s" if len(updated) != 1 else ""
@@ -2212,8 +2193,10 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 node_id: Id of the node to edit (see list_lab_nodes).
                 name: New name, if changing.
                 icon: New icon filename, if changing.
-                image: New image filename, if changing -- must be one of
-                    the template's own valid images (see get_node_template).
+                image: CURRENTLY REFUSED: on EVE-NG 6.2.0-4 any node edit
+                    containing `image` returns HTTP 500 and strands the lab
+                    lock, so nothing is sent. To change a node's image,
+                    delete the node and re-add it with add_lab_node(image=...).
                 ram: New RAM in MB, if changing.
                 cpu: New vCPU count, if changing.
                 cpulimit: New CPU limit toggle (0/1), if changing.
@@ -2226,7 +2209,11 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 disable_offload: New disable-offload toggle (0/1), if changing.
                 sat: New satellite setting, if changing.
                 eth_format: New interface name format string, if changing.
+                    Accepted but NOT applied on EVE-NG 6.2.0-4 (cosmetic;
+                    interfaces keep their template names).
                 eth_name: New explicit interface names list, if changing.
+                    Accepted but NOT applied on EVE-NG 6.2.0-4 (cosmetic;
+                    check with get_node_interfaces).
                 firstmac: New first interface MAC address, if changing.
                 qemu_version: New QEMU version, if changing.
                 qemu_arch: New QEMU architecture, if changing.
@@ -2367,10 +2354,11 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             `value` say what to change. For `component="icon"`, `value` is
             unused -- `icon_search` narrows EVE-NG's icon catalog the same
             way template matches do, via `icon_selection`. For
-            `component="image"`, `value` is also unused -- `image_search`
-            narrows *this resolved template's own* valid images (not a
-            global catalog -- images are template-scoped), via
-            `image_selection`.
+            `component="image"` is currently REFUSED: EVE-NG 6.2.0-4
+            answers any node image edit with an HTTP 500 and leaves the
+            lab lock stranded. `image_search`/`image_selection` are kept
+            for compatibility but unused; delete and re-add the nodes
+            with add_lab_node(image=...) instead.
 
             Whatever isn't supplied is prompted for one piece at a time --
             each call re-derives everything fresh from what's currently
@@ -2396,11 +2384,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 icon_search: Icon filename fragment to search for, for component="icon".
                 icon_selection: When multiple icons matched, the number or
                     exact filename of the one you want.
-                image_search: Image filename fragment to search for, for
-                    component="image" -- searched within the resolved
-                    template's own valid images only.
-                image_selection: When multiple images matched, the number
-                    or exact filename of the one you want.
+                image_search: Unused for now (component="image" is refused).
+                image_selection: Unused for now (component="image" is refused).
                 confirm: Set true on the final call to actually apply.
             """
             return await edit_lab_nodes_by_template(

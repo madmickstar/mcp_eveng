@@ -149,7 +149,7 @@ async def add_lab_network(
 # and EVE-NG's server-side lab lock file is never released (every later
 # write to that lab then fails until the `.lock` file is removed by hand on
 # the EVE-NG host). Same mechanism as the node `delay` workaround in
-# tools/nodes.py (`_with_delay_workaround`).
+# tools/nodes.py (`_with_modified_flag_padding`).
 #
 # Workaround: when the payload holds only such fields, pad it with the
 # network's own current `name` (value-blind -- resending the same name

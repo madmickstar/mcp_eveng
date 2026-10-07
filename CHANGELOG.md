@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-06
+
+Live findings on EVE-NG 6.2.0-4 (each node field sent bare, then padded).
+
+### Fixed
+- **Node edits holding none of `name`/`left`/`top` failed with 20026.**
+  `_MODIFIED_FLAG_FIELDS` wrongly listed `config`, `icon` and `image` as
+  flag-flipping, and padding only ever applied to `delay`-only edits, so
+  bare `icon`, `ram`, `config` (and `eth_name`/`eth_format`, ...) edits were
+  sent unpadded and rejected. The set is now `{name, left, top}` and padding
+  applies to any edit without one of them (`_with_delay_workaround` renamed
+  `_with_modified_flag_padding`). Padding is skipped, not blank-filled, if
+  the node's current name is unknown. The bulk `edit_lab_nodes_by_template`
+  path was sending its payload with no padding at all; it is padded now.
+- **Changing a node's `image` returned HTTP 500 and stranded the lab lock**
+  (not fixable by padding). `edit_lab_node` now refuses any payload
+  containing `image` before sending or stopping the node, naming the node
+  and pointing to delete + re-add.
+
+### Changed
+- **`edit_lab_nodes_by_template(component="image")` is now refused up
+  front** (same server crash) instead of walking through search, selection
+  and confirmation and then failing. `image_search`/`image_selection` are
+  kept for compatibility but unused; the unused `_search_template_images`
+  helper and its 8 flow tests were removed. Restore from git history if a
+  future EVE-NG version fixes image edits.
+- `eth_name`/`eth_format` success message and docstrings now state they are
+  accepted but not applied on this server version.
+
 ## [0.9.1] - 2026-10-06
 
 ### Fixed

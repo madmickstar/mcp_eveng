@@ -1688,7 +1688,6 @@ async def test_edit_lab_node_supports_every_expanded_field() -> None:
         client,
         "/User1/Lab 1.unl",
         9,
-        image="c8000v-26.01.01",
         cpulimit=1,
         delay=15,
         disable_offload=1,
@@ -1707,7 +1706,6 @@ async def test_edit_lab_node_supports_every_expanded_field() -> None:
     client.edit_lab_node.assert_awaited_once_with(
         "/User1/Lab 1.unl",
         9,
-        image="c8000v-26.01.01",
         cpulimit=1,
         delay=15,
         disable_offload=1,
@@ -1916,35 +1914,47 @@ async def test_change_node_delay_single_node_explicit_delay() -> None:
 # alongside delay, since name unconditionally sets the flag server-side.
 
 
-def test_with_delay_workaround_pads_name_when_delay_is_the_only_field() -> None:
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"delay": 11},
+        {"icon": "Router.png"},
+        {"ram": 4096},
+        {"config": "1"},
+        {"eth_name": ["Gi0/0"]},
+        {"eth_format": "Gi{0}"},
+        {"cpu": 2, "ethernet": 8},
+    ],
+)
+def test_padding_added_when_no_field_flips_the_modified_flag(fields: dict) -> None:
+    # Live (EVE-NG 6.2.0-4): only name/left/top flip the flag. A bare icon/ram/config/...
+    # edit fails with 20026 exactly like a bare delay edit.
     current = {"name": "VMX-1", "delay": 0}
-    assert nodes._with_delay_workaround({"delay": 11}, current) == {
-        "delay": 11,
-        "name": "VMX-1",
-    }
+    assert nodes._with_modified_flag_padding(fields, current) == {**fields, "name": "VMX-1"}
 
 
-def test_with_delay_workaround_does_not_override_an_explicit_name() -> None:
+def test_modified_flag_set_is_exactly_name_left_top() -> None:
+    assert {"name", "left", "top"} == nodes._MODIFIED_FLAG_FIELDS
+
+
+@pytest.mark.parametrize("flag_field", [{"name": "NewName"}, {"left": "200"}, {"top": "5"}])
+def test_padding_skipped_when_a_real_flag_field_is_present(flag_field: dict) -> None:
     current = {"name": "VMX-1", "delay": 0}
-    assert nodes._with_delay_workaround({"delay": 11, "name": "NewName"}, current) == {
+    fields = {"delay": 11, **flag_field}
+    assert nodes._with_modified_flag_padding(fields, current) == fields
+
+
+def test_padding_does_not_override_an_explicit_name() -> None:
+    current = {"name": "VMX-1", "delay": 0}
+    assert nodes._with_modified_flag_padding({"delay": 11, "name": "NewName"}, current) == {
         "delay": 11,
         "name": "NewName",
     }
 
 
-def test_with_delay_workaround_skips_padding_when_another_flag_field_present() -> None:
-    current = {"name": "VMX-1", "delay": 0}
-    assert nodes._with_delay_workaround({"delay": 11, "left": "200"}, current) == {
-        "delay": 11,
-        "left": "200",
-    }
-
-
-def test_with_delay_workaround_is_a_no_op_without_delay() -> None:
-    current = {"name": "VMX-1", "delay": 0}
-    assert nodes._with_delay_workaround({"icon": "Router.png"}, current) == {
-        "icon": "Router.png",
-    }
+@pytest.mark.parametrize("current", [{}, {"status": 0}])
+def test_padding_is_skipped_rather_than_blanking_the_name_when_current_name_unknown(current: dict) -> None:
+    assert nodes._with_modified_flag_padding({"icon": "Router.png"}, current) == {"icon": "Router.png"}
 
 
 async def test_edit_lab_node_delay_only_pads_name_in_the_actual_api_call() -> None:
@@ -2450,8 +2460,8 @@ async def test_edit_lab_nodes_by_template_confirm_applies_and_stops_running_node
 
     client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 1)  # only the running one
     assert client.edit_lab_node.await_count == 2
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, ethernet=16)
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, ethernet=16)
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, ethernet=16, name="SW1")
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, ethernet=16, name="SW2")
     assert result["status"] == "success"
 
 
@@ -2474,8 +2484,8 @@ async def test_edit_lab_nodes_by_template_node_selection_targets_only_chosen_sub
     )
 
     assert client.edit_lab_node.await_count == 2
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, cpu=2)
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 3, cpu=2)
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, cpu=2, name="SW1")
+    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 3, cpu=2, name="SW3")
     assert "SW1" in result["message"]
     assert "SW3" in result["message"]
     assert "SW2" not in result["message"]
@@ -2614,78 +2624,22 @@ async def test_edit_lab_nodes_by_template_icon_confirm_applies() -> None:
         confirm=True,
     )
 
-    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 1, icon="lan.png")
+    client.edit_lab_node.assert_awaited_once_with("/User1/Lab 1.unl", 1, icon="lan.png", name="SW1")
     assert result["status"] == "success"
 
 
-# -- edit_lab_nodes_by_template: image component (template-scoped search) ------
+# -- edit_lab_nodes_by_template: image component is refused --------------------
+#
+# Live (EVE-NG 6.2.0-4): any node edit containing `image` returns HTTP 500 and
+# strands the lab lock, even padded. The bulk tool refuses up front instead of
+# walking the user through search/selection/confirmation and then crashing.
 
 
-def _template_with_images(*image_names: str) -> dict:
-    return {
-        "status": "success",
-        "data": {"options": {"image": {"list": {name: name for name in image_names}}}},
-    }
-
-
-async def test_edit_lab_nodes_by_template_image_no_search_prompts() -> None:
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_edit_lab_nodes_by_template_image_component_is_refused_and_touches_nothing(confirm: bool) -> None:
     client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
+    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v", status=2), _node(2, "C8K2", "c8000v"))
     client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client, "/User1/Lab 1.unl", template="c8000v", node_selection="all", component="image"
-    )
-
-    assert result["status"] == "selection_required"
-    assert "image_search" in result["message"]
-    client.get_node_template.assert_not_awaited()
-
-
-async def test_edit_lab_nodes_by_template_image_searches_resolved_template_only() -> None:
-    # Confirms images come from THIS template's own list, not a global
-    # catalog -- get_node_template is called with the resolved template id.
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-26.01.01")
-    client.edit_lab_node.return_value = {"status": "success"}
-
-    await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="26",
-    )
-
-    client.get_node_template.assert_awaited_once_with("c8000v")
-
-
-async def test_edit_lab_nodes_by_template_image_search_no_match_is_cancelled() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-26.01.01")
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="zzz",
-    )
-
-    assert result["status"] == "cancelled"
-
-
-async def test_edit_lab_nodes_by_template_image_single_match_goes_to_confirmation() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-26.01.01")
 
     result = await nodes.edit_lab_nodes_by_template(
         client,
@@ -2694,114 +2648,13 @@ async def test_edit_lab_nodes_by_template_image_single_match_goes_to_confirmatio
         node_selection="all",
         component="image",
         image_search="26",
-    )
-
-    assert result["status"] == "confirmation_required"
-    assert "c8000v-26.01.01" in result["message"]
-
-
-async def test_edit_lab_nodes_by_template_image_multiple_matches_requires_selection() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images(
-        "c8000v-17.06.02", "c8000v-17.18.02", "c8000v-26.01.01"
-    )
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="c8000v",
-    )
-
-    assert result["status"] == "selection_required"
-    assert len(result["data"]["matches"]) == 3
-    assert "image_selection" in result["message"]
-
-
-async def test_edit_lab_nodes_by_template_image_selection_by_number() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="c8000v",
-        image_selection="2",
-    )
-
-    # sorted() -> ["c8000v-17.06.02", "c8000v-26.01.01"]
-    assert "c8000v-26.01.01" in result["message"]
-
-
-async def test_edit_lab_nodes_by_template_image_selection_by_exact_filename() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="c8000v",
-        image_selection="c8000v-17.06.02",
-    )
-
-    assert "c8000v-17.06.02" in result["message"]
-
-
-async def test_edit_lab_nodes_by_template_image_invalid_selection_is_error() -> None:
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-17.06.02", "c8000v-26.01.01")
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="c8000v",
-        image_selection="zzz",
+        confirm=confirm,
     )
 
     assert result["status"] == "error"
-
-
-async def test_edit_lab_nodes_by_template_image_confirm_applies_across_all_matching_nodes() -> None:
-    # This is the actual "update image in bulk for all devices with same
-    # node template" behavior the request asked for.
-    client = AsyncMock()
-    client.list_lab_nodes.return_value = _lab_nodes(_node(1, "C8K1", "c8000v"), _node(2, "C8K2", "c8000v"))
-    client.list_node_templates.return_value = _templates_catalog(("c8000v", "Cisco Catalyst 8000v"))
-    client.get_node_template.return_value = _template_with_images("c8000v-26.01.01")
-    client.edit_lab_node.return_value = {"status": "success"}
-
-    result = await nodes.edit_lab_nodes_by_template(
-        client,
-        "/User1/Lab 1.unl",
-        template="c8000v",
-        node_selection="all",
-        component="image",
-        image_search="26",
-        confirm=True,
-    )
-
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 1, image="c8000v-26.01.01")
-    client.edit_lab_node.assert_any_await("/User1/Lab 1.unl", 2, image="c8000v-26.01.01")
-    assert result["status"] == "success"
+    assert "delete the node and re-add it" in result["message"]
+    client.edit_lab_node.assert_not_awaited()
+    client.stop_node.assert_not_awaited()  # a running node must not be stopped for nothing
 
 
 async def test_edit_lab_nodes_by_template_vendor_and_template_combined_and() -> None:
@@ -2992,3 +2845,92 @@ async def test_connect_interface_does_not_serialize_different_labs() -> None:
     # Different labs must NOT be serialized -- both start before either
     # finishes, the opposite of the same-lab test above.
     assert set(events[:2]) == {"a-start", "b-start"}
+
+
+# -- edit_lab_node: padding beyond delay, image refusal, eth_* note ------------
+
+
+def _node_client(name: str = "R1", status: int = 0) -> AsyncMock:
+    client = AsyncMock()
+    client.list_lab_nodes.return_value = {"status": "success", "data": {"name": name, "status": status}}
+    client.edit_lab_node.return_value = {"status": "success"}
+    return client
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"icon": "Router-2D-Cat-Green-S.svg"}, {"icon": "Router-2D-Cat-Green-S.svg", "name": "R1"}),
+        ({"ram": 4096}, {"ram": 4096, "name": "R1"}),
+        ({"config": "1"}, {"config": "1", "name": "R1"}),
+        ({"delay": 5}, {"delay": 5, "name": "R1"}),
+        ({"ram": 2048, "left": 10}, {"ram": 2048, "left": "10"}),  # left flips the flag: no pad
+        ({"name": "R2", "ram": 2048}, {"name": "R2", "ram": 2048}),
+    ],
+)
+async def test_edit_lab_node_pads_name_for_every_flagless_payload(kwargs: dict, expected: dict) -> None:
+    client = _node_client()
+
+    result = await nodes.edit_lab_node(client, "/lab.unl", 4, **kwargs)
+
+    assert result["status"] == "success"
+    client.edit_lab_node.assert_awaited_once_with("/lab.unl", 4, **expected)
+
+
+async def test_edit_lab_node_padding_is_not_reported_as_a_changed_field() -> None:
+    client = _node_client()
+
+    result = await nodes.edit_lab_node(client, "/lab.unl", 4, ram=4096)
+
+    assert "ram=4096" in result["message"]
+    assert "name=" not in result["message"]
+
+
+@pytest.mark.parametrize("extra", [{}, {"left": 10, "config": "1"}, {"name": "X"}])
+async def test_edit_lab_node_image_is_refused_before_anything_is_sent(extra: dict) -> None:
+    # Live: image + name/left/config padding still 500s and strands the lab lock.
+    client = _node_client(name="Apps", status=2)
+
+    result = await nodes.edit_lab_node(client, "/lab.unl", 4, image="linux-ubuntu-server-24.04", **extra)
+
+    assert result["status"] == "error"
+    assert "'Apps'" in result["message"]
+    assert "id 4" in result["message"]
+    assert "delete the node and re-add it" in result["message"]
+    client.edit_lab_node.assert_not_awaited()
+    client.stop_node.assert_not_awaited()  # the node must not be stopped for an edit that won't happen
+
+
+async def test_registered_edit_lab_node_refuses_image() -> None:
+    from mcp.server.fastmcp import FastMCP
+
+    client = _node_client()
+    mcp = FastMCP("node-image-test")
+
+    async def get_client() -> AsyncMock:
+        return client
+
+    nodes.register(mcp, get_client, lambda _n: True)
+
+    await mcp.call_tool("edit_lab_node", {"lab_path": "/lab.unl", "node_id": 4, "image": "x"})
+
+    client.edit_lab_node.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kwargs", [{"eth_name": ["Ge0/0"]}, {"eth_format": "Ge{0}"}])
+async def test_edit_lab_node_eth_fields_success_message_says_they_are_not_applied(kwargs: dict) -> None:
+    client = _node_client()
+
+    result = await nodes.edit_lab_node(client, "/lab.unl", 4, **kwargs)
+
+    assert result["status"] == "success"
+    assert "not applied" in result["message"]
+    assert "get_node_interfaces" in result["message"]
+
+
+async def test_edit_lab_node_without_eth_fields_has_no_eth_note() -> None:
+    client = _node_client()
+
+    result = await nodes.edit_lab_node(client, "/lab.unl", 4, ram=1024)
+
+    assert "not applied" not in result["message"]

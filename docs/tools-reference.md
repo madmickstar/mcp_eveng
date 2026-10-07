@@ -523,7 +523,7 @@ in an unhandled server path: HTTP 500 with no JSON body, **and EVE-NG's
 server-side lab lock file is never released**, so every later write to
 that lab fails until `find /opt/unetlab/labs/ -name '*.lock' -exec rm {} \;`
 is run on the EVE-NG host. `edit_lab_network` now avoids this the same way
-`edit_lab_node` handles a delay-only edit: such a payload is padded with the
+`edit_lab_node` pads (see "Node edits" below): such a payload is padded with the
 network's own current `name` (a value-blind field that always counts as a
 change). If the network id doesn't exist, nothing is sent at all.
 
@@ -531,6 +531,25 @@ change). If the network id doesn't exist, nothing is sent at all.
 icon names are the `icons` list in `list_network_types`'s response — a
 different catalogue from node icons (icons seen on nodes, such as
 `Router-2D-Cat-Green-S.svg`, are not necessarily valid for networks).
+
+**Node edits — confirmed live on EVE-NG 6.2.0-4 (2026-10-06).**
+- *Only `name`, `left` and `top` flip EVE-NG's "modified" flag.* A node edit
+  holding none of them (bare `icon`, `ram`, `config`, `delay`,
+  `eth_name`, …) is rejected with `Cannot edit node … (20026)`. An earlier
+  version assumed `icon`/`config`/`image` also flipped it and padded only
+  `delay`-only edits. `edit_lab_node` and `edit_lab_nodes_by_template` now
+  pad every such edit with the node's own current `name` (value-blind; not
+  reported as a changed field; skipped if the current name is unknown rather
+  than blanking it).
+- *`image` cannot be changed.* Any node edit containing `image` returns HTTP
+  500 and strands the lab lock, even when padded. `edit_lab_node` refuses
+  before sending (naming the node, without stopping it), and
+  `edit_lab_nodes_by_template` refuses `component="image"` up front. To use a
+  different image, delete the node and re-add it with
+  `add_lab_node(image=...)`; a fresh node with a valid image works.
+- *`eth_name` / `eth_format` are accepted but not applied*: the edit reports
+  success, but `get_node_interfaces` keeps the template names. The success
+  message now says so.
 
 **`visibility=0` on an unwired network deletes it.** Confirmed live: if a
 network has nothing attached (`count` 0), setting `visibility=0` makes
