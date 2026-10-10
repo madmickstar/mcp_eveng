@@ -127,12 +127,8 @@ async def share_lab(
         return {
             "status": "error",
             "message": (
-                "Lab sharing is a PRO-only EVE-NG feature -- listed as a "
-                "separate toggleable feature on EVE-NG's own official comparison page, "
-                "and confirmed live: on Community, get_lab never returns a 'shared' key "
-                'at all, and attempting to actually add a share fails with "Lab has not '
-                'been modified" (the request is silently accepted with no effect). This '
-                "server is running Community edition, so lab sharing isn't available here."
+                "Lab sharing is a PRO-only EVE-NG feature. This server is running Community "
+                "edition, so it isn't available here. Nothing was changed."
             ),
         }
 
@@ -323,7 +319,7 @@ async def open_lab(client: EvengClient, name: str, search_path: str = "/", selec
     if not name or not name.strip():
         return {
             "status": "error",
-            "message": "A lab name or path is required; none was supplied.",
+            "message": "Missing required argument `name`: give the lab name or path (or part of it) to look up.",
         }
 
     all_labs = await client.list_all_labs(search_path)
@@ -413,7 +409,10 @@ async def delete_lab(
     if not name or not name.strip():
         return {
             "status": "error",
-            "message": "A lab name or path is required to delete a lab; none was supplied.",
+            "message": (
+                "Missing required argument `name`: give the lab name or path (or part of it) to delete. Nothing was "
+                "deleted."
+            ),
         }
 
     all_labs = await client.list_all_labs(search_path)
@@ -443,7 +442,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Get metadata for a lab.
 
             Args:
-                lab_path: Full path to the .unl lab file, e.g. "/User1/Lab 1.unl".
+                lab_path: REQUIRED on every call. Full path to the .unl lab file, e.g. "/User1/Lab 1.unl".
             """
             return await get_lab(await get_client(), lab_path)
 
@@ -510,7 +509,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Edit an existing lab's metadata. Only supplied fields are changed.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 name: New name, if changing.
                 version: New version, if changing.
                 author: New author, if changing.
@@ -566,7 +565,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             every delete tool.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 search: Username fragment to search for, case-insensitive.
                     Empty matches every user; "all" shares with everyone directly.
                 selection: When multiple users matched, the number(s),
@@ -582,7 +581,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Move a lab to a different folder.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 new_path: Destination folder path.
             """
             return await move_lab(await get_client(), lab_path, new_path)
@@ -618,7 +617,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Get the full node/network connection topology of a lab.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
             """
             return await get_lab_topology(await get_client(), lab_path)
 
@@ -629,7 +628,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Get all ethernet/serial endpoints available in a lab (useful before wiring nodes).
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
             """
             return await get_lab_links(await get_client(), lab_path)
 
@@ -640,7 +639,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """List background pictures/annotations placed in a lab, or get one by id.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 picture_id: Specific picture id, or omit to list all.
             """
             return await list_lab_pictures(await get_client(), lab_path, picture_id)

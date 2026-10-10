@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-09
+
+### Changed
+- **Missing/invalid tool arguments now produce a short, direct error.**
+  An agent that called `add_lab_node` without `lab_path` got pydantic's raw
+  text ("1 validation error for _add_lab_nodeArguments ... Field required
+  [type=missing, input_value=..., input_type=dict] ... errors.pydantic.dev").
+  It is now rewritten in one place (`ToolCallLoggingFastMCP.call_tool`, so
+  it covers every tool) to, e.g.: "Invalid arguments for add_lab_node:
+  `lab_path` is required but was not provided. Nothing was sent to EVE-NG.
+  Correct the call and resend it with every required argument: lab_path."
+  Each bad argument is named once (union types such as `left: str | int` no
+  longer produce one entry per branch), what was received is echoed
+  (truncated; never for password/secret/token-style arguments), and the
+  tool's required arguments are listed. The server log carries the same
+  text. Only argument-validation failures are rewritten; errors raised
+  inside a tool, unknown-tool errors and everything else are unchanged.
+- All `lab_path` argument docs now say "REQUIRED on every call".
+- **Tool error wording audit** -- state the problem, name the argument, say
+  what to do; drop history and justification:
+  - "A ... is required to delete a ...; none was supplied" -> "Missing
+    required argument `name`: give the ... to delete. Nothing was deleted."
+    (folder `path`, lab/network/node `name`, user `username`, wipe_node `node_id`).
+  - "At least one field to change is required; none was supplied" -> "No
+    fields to change were given. Provide at least one of: name, left, top, ...".
+  - PRO-only errors (lab sharing, export_node, get/set_link_quality, capture)
+    no longer recite where the feature was documented/confirmed.
+  - `connect_interface` bridge errors say nothing was wired and what to
+    check/delete; an "this project previously had a bug" note was removed.
+  - Interface-resolution errors ("no available ethernet interfaces") now say
+    what to do next; empty/unparseable response, 5xx-without-body, network
+    types, `order` and `asyncssh` errors reworded to give a next step.
+  - Left alone: startup configuration errors (`config.py`, capture relay) and
+    messages passed through verbatim from EVE-NG.
+
 ## [0.9.2] - 2026-10-06
 
 Live findings on EVE-NG 6.2.0-4 (each node field sent bare, then padded).

@@ -75,7 +75,9 @@ async def delete_folder(
     if not path or not path.strip():
         return {
             "status": "error",
-            "message": "A folder path (or part of one) is required to delete a folder; none was supplied.",
+            "message": (
+                "Missing required argument `path`: give the folder path (or part of it) to delete. Nothing was deleted."
+            ),
         }
 
     candidates = await _find_folders_by_path_substring(client, path, search_path)

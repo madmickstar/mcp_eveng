@@ -68,11 +68,9 @@ async def _require_pro(client: EvengClient) -> dict[str, Any] | None:
         return {
             "status": "error",
             "message": (
-                "Capture container listing/streaming is a PRO-only "
-                "feature -- Community's capture:// links already work "
-                "unmodified via its own GUI and need no MCP tool at all. "
-                "This server is running Community edition, so this tool "
-                "isn't available here."
+                "Capture container listing/streaming is a PRO-only EVE-NG feature. This server is "
+                "running Community edition, so this tool isn't available here. (On Community, "
+                "capture:// links work directly from EVE-NG's own web GUI.)"
             ),
         }
     return None
@@ -92,10 +90,9 @@ def _require_asyncssh() -> dict[str, Any] | None:
         return {
             "status": "error",
             "message": (
-                "asyncssh isn't installed, but it's a base dependency of "
-                "mcp-eveng -- this usually means a broken or incomplete "
-                "install. Try `pip install --force-reinstall mcp-eveng` "
-                "(or `pip install asyncssh` directly as a quick fix)."
+                "asyncssh is not installed, so this tool cannot run. Install it with "
+                "`pip install asyncssh` (or `pip install --force-reinstall mcp-eveng`), then restart "
+                "the server."
             ),
         }
     return None

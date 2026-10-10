@@ -133,7 +133,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             filtering.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Id of the (running) node to send commands to.
                 commands: One command, or a list of commands to send in order.
                 wait_seconds: How long to wait for a command's output to

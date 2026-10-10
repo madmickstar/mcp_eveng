@@ -187,7 +187,7 @@ async def get_link_quality(
     automatically. PRO only.
 
     Args:
-        lab_path: Full path to the .unl lab file.
+        lab_path: REQUIRED on every call. Full path to the .unl lab file.
         node_id: The node on the side you want to read. Exactly one of
             node_id/node_name is required.
         node_name: Case-insensitive substring match against node names,
@@ -202,10 +202,8 @@ async def get_link_quality(
         return {
             "status": "error",
             "message": (
-                "Link quality (delay/jitter/packet loss/bandwidth per connection) "
-                "is a PRO-only EVE-NG feature, not available on "
-                "Community at all. This server is running Community edition, "
-                "so get_link_quality isn't available here."
+                "get_link_quality is a PRO-only EVE-NG feature (per-connection delay/jitter/loss/bandwidth). "
+                "This server is running Community edition, so it isn't available here."
             ),
         }
 
@@ -375,7 +373,7 @@ async def set_link_quality(
     how the far side's current values are read automatically.
 
     Args:
-        lab_path: Full path to the .unl lab file.
+        lab_path: REQUIRED on every call. Full path to the .unl lab file.
         node_id: The node on the side you want to change.
         interface: That node's interface name (e.g. "Gi0/1") or 0-based
             index -- must already be connected; this only applies to an
@@ -401,10 +399,8 @@ async def set_link_quality(
         return {
             "status": "error",
             "message": (
-                "Link quality (delay/jitter/packet loss/bandwidth per connection) "
-                "is a PRO-only EVE-NG feature, not available on "
-                "Community at all. This server is running Community edition, "
-                "so set_link_quality isn't available here."
+                "set_link_quality is a PRO-only EVE-NG feature (per-connection delay/jitter/loss/bandwidth). "
+                "This server is running Community edition, so it isn't available here."
             ),
         }
 
@@ -579,7 +575,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             resolved automatically. PRO only.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: The node on the side you want to read. Exactly
                     one of node_id/node_name is required.
                 node_name: Case-insensitive substring match against node
@@ -617,7 +613,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             side of an existing connection. PRO only.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: The node on the side you want to change.
                 interface: That node's interface name (e.g. "Gi0/1") or
                     0-based index -- must already be connected.

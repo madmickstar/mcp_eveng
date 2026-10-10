@@ -61,11 +61,9 @@ def _require(result: JsonDict | None, method: str, path: str) -> JsonDict:
     """
     if result is None:
         raise EvengAPIError(
-            f"EVE-NG returned an empty or unparseable response body for {method} {path} "
-            "(the HTTP status itself looked successful, so this wasn't already reported "
-            "as a server error above). If this happened right after another request to "
-            "the same lab, it may be transient contention on EVE-NG's side -- retrying "
-            "often resolves it."
+            f"EVE-NG returned an empty or unparseable response for {method} {path}, although the HTTP "
+            "status looked successful. This can happen when the request follows another request to the "
+            "same lab too quickly. Wait a few seconds, then retry the call."
         )
     return result
 
@@ -169,17 +167,16 @@ class EvengClient:
             if response.status_code >= 500:
                 raise EvengAPIError(
                     (
-                        f"EVE-NG server returned {response.status_code} "
-                        f"{response.reason_phrase} for {method} {path}, with no JSON error "
-                        "body -- this usually means an unhandled exception on the EVE-NG "
-                        "server itself, not a problem with the request.\n\n"
-                        "A common cause is a stale lock file left behind by an earlier "
-                        "interrupted request. On the EVE-NG server, check for one with:\n"
+                        f"EVE-NG returned {response.status_code} {response.reason_phrase} for {method} {path} "
+                        "with no JSON error body: an unhandled exception on the EVE-NG server, not a "
+                        "problem with the request.\n\n"
+                        "Most likely cause: a stale lab lock file left by an earlier failed request. "
+                        "On the EVE-NG server, check for one with:\n"
                         "  find /opt/unetlab/labs/ -name '*.lock'\n"
                         "and remove any found with:\n"
                         "  find /opt/unetlab/labs/ -name '*.lock' -exec rm {} \\;\n"
-                        "then retry. If that doesn't resolve it, check the EVE-NG server's "
-                        "own logs for the underlying exception."
+                        "then retry the call. If it still fails, read the EVE-NG server's own logs "
+                        "for the underlying exception."
                     ),
                     code=response.status_code,
                     status="server_error",

@@ -489,7 +489,10 @@ async def delete_lab_node(
         if not name or not name.strip():
             return {
                 "status": "error",
-                "message": "A node name is required to delete a node; none was supplied.",
+                "message": (
+                    "Missing required argument `name`: give the node name (or part of it) to delete. "
+                    "Nothing was deleted."
+                ),
             }
 
         candidates = await _find_nodes_by_name(client, lab_path, name)
@@ -708,7 +711,11 @@ async def edit_lab_node(
         if not fields:
             return {
                 "status": "error",
-                "message": "At least one field to change is required; none was supplied.",
+                "message": (
+                    "No fields to change were given. Provide at least one of: name, left, top, icon, "
+                    "ram, cpu, ethernet, "
+                    "console, config, delay (see the tool's arguments for the rest)."
+                ),
             }
 
         if name is not None and not confirm_duplicate_name:
@@ -872,7 +879,7 @@ async def change_node_delay(
         if not bulk:
             return {
                 "status": "error",
-                "message": "Either node_id (single node) or bulk=true (multiple nodes) is required.",
+                "message": "Provide node_id (one node) or bulk=true (many nodes). Neither was given.",
             }
 
         resolved_increment = increment if increment is not None else _DEFAULT_DELAY_INCREMENT
@@ -936,7 +943,10 @@ async def change_node_delay(
                 ordered_targets.append(all_nodes[idx - 1])
 
             if not ordered_targets:
-                return {"status": "error", "message": "`order` didn't resolve to any nodes."}
+                return {
+                    "status": "error",
+                    "message": f'`order` matched no nodes. Give node numbers from 1 to {len(all_nodes)}, e.g. "2,1,3".',
+                }
 
         assignments = [(node, resolved_increment * (position + 1)) for position, node in enumerate(ordered_targets)]
 
@@ -1124,8 +1134,8 @@ async def edit_lab_nodes_by_template(
             return {
                 "status": "error",
                 "message": (
-                    "At least a vendor or a template name/fragment is required to start "
-                    '(e.g. vendor="cisco" or template="vios").'
+                    "Provide `vendor` or `template` (a name or fragment) to choose which nodes to "
+                    'start, e.g. vendor="cisco" or template="vios".'
                 ),
             }
 
@@ -1447,21 +1457,36 @@ def _resolve_interface_selection(
             return {"index": interface}
         return {
             "status": "error",
-            "message": f"interface index {interface} is out of range (has {len(ethernet)} ethernet interfaces)",
+            "message": (
+                f"Interface index {interface} is out of range: the node has {len(ethernet)} ethernet interface(s), "
+                f"numbered from 0. Use a valid index or an interface name."
+            ),
         }
 
     text = str(interface).strip() if interface is not None else ""
 
     available = _available_ethernet_interfaces(interfaces_data)
     if not available:
-        return {"status": "error", "message": "no available (unconnected) ethernet interfaces"}
+        return {
+            "status": "error",
+            "message": (
+                "The node has no unconnected ethernet interfaces. Disconnect one first, or add more with "
+                "edit_lab_node(ethernet=N)."
+            ),
+        }
 
     needle = text.lower()
     matches = [(index, iface) for index, iface in available if needle in str(iface.get("name", "")).strip().lower()]
 
     if not matches:
         described = f" matching {interface!r}" if text else ""
-        return {"status": "error", "message": f"no available ethernet interface{described} found"}
+        return {
+            "status": "error",
+            "message": (
+                f"No unconnected ethernet interface{described} found. List the node's interfaces with "
+                f"get_node_interfaces."
+            ),
+        }
 
     if len(matches) == 1:
         index, _ = matches[0]
@@ -1653,9 +1678,8 @@ async def connect_interface(
             return {
                 "status": "error",
                 "message": (
-                    "Exactly one target is required: target_node_id (connect to another "
-                    "node) or network_id/network_name (connect to an existing network) -- "
-                    "not both, not neither."
+                    "Provide exactly one target: target_node_id (connect to another node) or "
+                    "network_id/network_name (connect to an existing network). You gave both, or neither."
                 ),
             }
 
@@ -1776,7 +1800,11 @@ async def connect_interface(
             if new_network_id is None:
                 return {
                     "status": "error",
-                    "message": (f"Created the backing bridge network but couldn't read back its id.{stop_note}"),
+                    "message": (
+                        "Created the backing bridge network but could not read its id, so nothing was "
+                        "wired. Check list_lab_networks for a leftover p2p_ network and delete it, "
+                        f"then retry.{stop_note}"
+                    ),
                 }
             new_network_id = int(new_network_id)
 
@@ -1788,11 +1816,9 @@ async def connect_interface(
                 return {
                     "status": "error",
                     "message": (
-                        f"Created bridge network (id {new_network_id}, reported success) but "
-                        "it never showed up in list_lab_networks. This project previously had "
-                        "a bug that caused exactly this (add_lab_network omitting left/top), "
-                        f"now fixed -- if it's still happening, something else needs "
-                        f"investigating rather than assuming it's just slow.{stop_note}"
+                        f"Created bridge network (id {new_network_id}) but it never appeared in "
+                        "list_lab_networks, so nothing was wired. Check list_lab_networks, delete the "
+                        f"leftover network if it is there, then retry.{stop_note}"
                     ),
                 }
 
@@ -1945,9 +1971,8 @@ async def wipe_node(
             return {
                 "status": "error",
                 "message": (
-                    "node_id is required. Pass a specific node's id to wipe just that "
-                    'node, or node_id="all" to wipe every node in the lab -- which asks '
-                    "for confirmation before it actually wipes anything."
+                    "Missing required argument `node_id`: give a node id to wipe one node, or "
+                    '"all" to wipe every node in the lab (that asks for confirmation first).'
                 ),
             }
 
@@ -2000,11 +2025,8 @@ async def export_node(client: EvengClient, lab_path: str, node_id: int | None = 
         return {
             "status": "error",
             "message": (
-                "Exporting node config is a PRO-only EVE-NG feature -- listed "
-                "as a separate toggleable feature on EVE-NG's own official comparison "
-                "page, and confirmed live to fail unconditionally on Community "
-                "regardless of node type or state. This server is running Community "
-                "edition, so export_node isn't available here."
+                "export_node is a PRO-only EVE-NG feature. This server is running Community "
+                "edition, so it isn't available here."
             ),
         }
     return await client.export_node(lab_path, node_id)
@@ -2021,7 +2043,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             template's description -- EVE-NG's API has no explicit vendor field.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Specific node id, or omit to list all nodes.
             """
             return await list_lab_nodes(await get_client(), lab_path, node_id)
@@ -2068,7 +2090,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             existing node on both axes.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 template: Template id, name, or vendor to search for -- a
                     fragment is enough, e.g. "vios", "cisco", or "juniper".
                     Empty lists every available template.
@@ -2119,7 +2141,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             call here.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 name: Node name or a fragment of one to delete. Required.
                 selection: When multiple nodes matched, the number(s) and/or
                     exact name(s) of the one(s) to delete, space/comma separated.
@@ -2189,7 +2211,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             confirm_duplicate_name=true to use it anyway.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Id of the node to edit (see list_lab_nodes).
                 name: New name, if changing.
                 icon: New icon filename, if changing.
@@ -2294,7 +2316,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             changed before that.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Id of a single node to change. Overrides `bulk` if given.
                 delay: New delay in seconds, for single-node mode. Default 10.
                 bulk: Required (with node_id omitted) for multi-node mode.
@@ -2371,7 +2393,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             cancels -- same wording as every delete tool.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 vendor: Vendor to search for, e.g. "cisco". At least this
                     or `template` is required.
                 template: Template id/name fragment to search for, e.g. "vios".
@@ -2411,7 +2433,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """Get a node's ethernet/serial interfaces and what they're wired to.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Id of the node.
             """
             return await get_node_interfaces(await get_client(), lab_path, node_id)
@@ -2481,7 +2503,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             wiring them -- same stop-if-needed behavior as `edit_lab_node`.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Id of the node whose interface is being connected.
                 interface: Which interface on node_id -- index, a search
                     string, or omit to see every available one.
@@ -2532,7 +2554,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             `change_node_delay`) when started this way.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to start, or omit to start all nodes.
             """
             return await start_node(await get_client(), lab_path, node_id)
@@ -2548,7 +2570,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             for why.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to stop, or omit to stop all nodes.
             """
             return await stop_node(await get_client(), lab_path, node_id)
@@ -2567,7 +2589,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             them all.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to wipe, or "all" to wipe every node
                     (with confirmation -- see above). Required; there's
                     no default "wipe everything" behavior.
@@ -2591,7 +2613,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             Community.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to export, or omit to export all nodes.
             """
             return await export_node(await get_client(), lab_path, node_id)

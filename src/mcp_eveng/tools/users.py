@@ -80,7 +80,10 @@ async def delete_user(client: EvengClient, username: str, selection: str = "", c
     if not username or not username.strip():
         return {
             "status": "error",
-            "message": "A username is required to delete a user; none was supplied.",
+            "message": (
+                "Missing required argument `username`: give the username (or part of it) to delete. Nothing was "
+                "deleted."
+            ),
         }
 
     candidates = await _find_users_by_username(client, username)

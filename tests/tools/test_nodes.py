@@ -751,7 +751,7 @@ async def test_wipe_node_requires_node_id() -> None:
     result = await nodes.wipe_node(client, "/User1/Lab 1.unl")
 
     assert result["status"] == "error"
-    assert "node_id is required" in result["message"]
+    assert "Missing required argument `node_id`" in result["message"]
     client.wipe_node.assert_not_awaited()
     client.list_lab_nodes.assert_not_awaited()
 
@@ -940,7 +940,7 @@ def test_resolve_interface_selection_digit_string_out_of_range_is_now_a_name_sea
     # No "5" substring anywhere in "eth0" -- a plain no-match error, not
     # the old "out of range" index message.
     assert "out of range" not in result["message"]
-    assert "no available ethernet interface" in result["message"]
+    assert "No unconnected ethernet interface" in result["message"]
 
 
 def test_resolve_interface_selection_mangled_name_is_caught_as_ambiguous_not_silently_wrong() -> None:
@@ -972,7 +972,7 @@ def test_resolve_interface_selection_no_available_interfaces_errors() -> None:
     data = {"ethernet": [{"name": "Gi0/0", "network_id": 1}]}
     result = nodes._resolve_interface_selection(data, None, "")
     assert result["status"] == "error"
-    assert "no available" in result["message"]
+    assert "no unconnected ethernet interfaces" in result["message"]
 
 
 def test_resolve_interface_selection_none_single_available_resolves_directly() -> None:
@@ -1038,7 +1038,7 @@ def test_resolve_interface_selection_search_no_match_errors() -> None:
     data = {"ethernet": [{"name": "Gi0/0", "network_id": 0}]}
     result = nodes._resolve_interface_selection(data, "Gi0/9", "")
     assert result["status"] == "error"
-    assert "no available ethernet interface" in result["message"]
+    assert "No unconnected ethernet interface" in result["message"]
 
 
 def test_resolve_interface_selection_search_multiple_matches_requires_selection() -> None:
@@ -1198,7 +1198,7 @@ async def test_connect_interface_reports_clear_error_when_network_never_ready(mo
     result = await nodes.connect_interface(client, "/User1/Lab 1.unl", 1, target_node_id=2)
 
     assert result["status"] == "error"
-    assert "never showed up" in result["message"]
+    assert "never appeared" in result["message"]
     client.set_node_interface.assert_not_awaited()
 
 

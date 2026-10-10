@@ -92,7 +92,10 @@ async def add_lab_network(
             if not type_names:
                 return {
                     "status": "error",
-                    "message": "Could not retrieve the list of network types from the server.",
+                    "message": (
+                        "Could not read the network types from EVE-NG. "
+                        "Check the connection with get_status, then retry."
+                    ),
                 }
             return {
                 "status": "selection_required",
@@ -256,7 +259,10 @@ async def edit_lab_network(
         if not fields:
             return {
                 "status": "error",
-                "message": "At least one field to change is required; none was supplied.",
+                "message": (
+                    "No fields to change were given. Provide at least one of: name, left, top, visibility, icon (also "
+                    "hideme, style, color, label)."
+                ),
             }
         api_fields = fields
         hiding = _is_hide_request(fields)
@@ -348,7 +354,10 @@ async def delete_lab_network(
         if not name or not name.strip():
             return {
                 "status": "error",
-                "message": "A network name is required to delete a network; none was supplied.",
+                "message": (
+                    "Missing required argument `name`: give the network name (or part of it) to delete. Nothing was "
+                    "deleted."
+                ),
             }
 
         candidates = await _find_networks_by_name(client, lab_path, name)
@@ -377,7 +386,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             """List all networks in a lab, or get a single network by id.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 network_id: Specific network id, or omit to list all.
             """
             return await list_lab_networks(await get_client(), lab_path, network_id)
@@ -407,7 +416,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             pnetN form.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 network_type: See `list_network_types` for valid values,
                     "cloud"/"cloud0"-"cloud9" for pnet0-pnet9, or omit to
                     be shown the list.
@@ -461,7 +470,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             something set at creation time.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 network_id: Id of the network to edit (see list_lab_networks).
                 name: New name, if changing.
                 left: New canvas position from the left (integer or numeric string), if changing.
@@ -518,7 +527,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             per call here.
 
             Args:
-                lab_path: Full path to the .unl lab file.
+                lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 name: Network name or a fragment of one to delete. Required.
                 selection: When multiple networks matched, the number(s) and/or
                     exact name(s) of the one(s) to delete, space/comma separated.
