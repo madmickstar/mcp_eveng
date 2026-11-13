@@ -23,10 +23,12 @@ ourselves, adding `ssl_certfile`/`ssl_keyfile` when configured.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import sys
 import warnings
+from typing import Any
 
 import anyio
 from mcp.server.fastmcp import FastMCP
@@ -193,6 +195,34 @@ def _check_tls_files_readable(cert_path: str | None, key_path: str | None) -> No
             raise SystemExit(1) from None
 
 
+def _is_benign_connection_reset(context: dict[str, Any]) -> bool:
+    """True for asyncio's "connection lost" callback failing on an already-reset socket.
+
+    Python's Windows ProactorEventLoop logs `ConnectionResetError: [WinError
+    10054]` from `_ProactorBasePipeTransport._call_connection_lost` when a
+    client drops a connection abruptly (e.g. an MCP client closing its SSE
+    stream). The request has already finished by then, so it is noise, not a
+    failure. Matches only that callback with that exception type.
+    """
+    exc = context.get("exception")
+    if not isinstance(exc, ConnectionResetError):
+        return False
+    where = f"{context.get('message', '')} {context.get('handle', '')}"
+    return "_call_connection_lost" in where
+
+
+def _install_connection_reset_filter(loop: asyncio.AbstractEventLoop) -> None:
+    """Demote the benign connection-reset above to DEBUG; every other loop error is unchanged."""
+
+    def handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        if _is_benign_connection_reset(context):
+            logger.debug("Ignoring client connection reset during close: %s", context.get("exception"))
+            return
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+
+
 def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Transport) -> None:
     """Serve `--sse`/`--http` ourselves, not via `FastMCP.run()` -- see this
     module's docstring for why."""
@@ -223,7 +253,12 @@ def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Tran
         ssl_keyfile_password=(settings.tls_key_password.get_secret_value() if settings.tls_key_password else None),
     )
     server = uvicorn.Server(config)
-    anyio.run(server.serve)
+
+    async def serve() -> None:
+        _install_connection_reset_filter(asyncio.get_running_loop())
+        await server.serve()
+
+    anyio.run(serve)
 
 
 def run(transport: Transport = "stdio") -> None:

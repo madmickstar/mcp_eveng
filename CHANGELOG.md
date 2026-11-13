@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-11-13
+
+### Fixed
+- **Spurious `ConnectionResetError: [WinError 10054]` traceback in `--http`/`--sse`
+  logs on Windows.** After a successful tool call, when the client closed its
+  stream, Python's Windows `ProactorEventLoop` logged an ERROR traceback from
+  `_ProactorBasePipeTransport._call_connection_lost` (seen on Python 3.13).
+  The request had already completed; it was cosmetic. That one case (a
+  `ConnectionResetError` raised by the connection-lost callback) is now logged
+  at DEBUG. Every other event-loop error is still reported as before.
+
 ## [0.9.6] - 2026-11-13
 
 ### Added
