@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-11-13
+
+### Added
+- **Lab satellite (EVE-NG PRO clusters).** `create_lab` and `edit_lab` take a
+  new optional `satellite` argument: `"any"`, `"master"`, `"satellite1"`,
+  `"satellite2"`, ... or the numeric id. EVE-NG PRO's lab object carries a
+  `sat` field (`get_lab` returns e.g. `"sat": "1"`); its satellite list maps
+  any = `-1`, master = `0`, satellite1 = `1`, satellite2 = `2`, ... The name is
+  translated to that id and sent as `sat`. An unknown name is refused before
+  anything is sent. Omitting it leaves EVE-NG's default (`any`).
+- After a create/edit that sets a satellite, the lab is re-read and the result
+  carries a `warning` if EVE-NG did not store the requested value, so a
+  wrongly named request field cannot fail silently.
+
+### Notes
+- The `sat` request key for lab create/edit is inferred from the field
+  `get_lab` returns (and the existing node `sat` field); confirm it live on a
+  cluster. Node placement within a lab is unchanged (`edit_lab_node` `sat`).
+
 ## [0.9.4] - 2026-11-13
 
 ### Fixed

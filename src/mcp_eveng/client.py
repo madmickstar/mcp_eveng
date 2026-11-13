@@ -428,8 +428,9 @@ class EvengClient:
         author: str = "",
         description: str = "",
         body: str = "",
+        sat: str | None = None,
     ) -> JsonDict:
-        payload = {
+        payload: JsonDict = {
             "path": path,
             "name": name,
             "version": version,
@@ -437,6 +438,8 @@ class EvengClient:
             "description": description,
             "body": body,
         }
+        if sat is not None:
+            payload["sat"] = sat
         return await self._post("/labs", json=payload)
 
     async def edit_lab(self, lab_path: str, **fields: Any) -> JsonDict:

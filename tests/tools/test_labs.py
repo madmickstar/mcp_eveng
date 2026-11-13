@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
 from mcp_eveng.tools import labs
 
 
@@ -670,3 +672,99 @@ async def test_delete_lab_searches_from_given_search_path() -> None:
     await labs.delete_lab(client, "test", search_path="/User1")
 
     client.list_all_labs.assert_awaited_once_with("/User1")
+
+
+# -- lab satellite -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("any", "-1"),
+        ("ANY", "-1"),
+        ("master", "0"),
+        ("satellite1", "1"),
+        ("Satellite 3", "3"),
+        ("sat2", "2"),
+        (1, "1"),
+        ("0", "0"),
+        (-1, "-1"),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_resolve_satellite(given: str | int | None, expected: str | None) -> None:
+    assert labs._resolve_satellite(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["satellite", "nope", "-5", "satelliteX"])
+def test_resolve_satellite_rejects_unknown(bad: str) -> None:
+    with pytest.raises(ValueError, match="Unknown satellite"):
+        labs._resolve_satellite(bad)
+
+
+async def test_create_lab_with_satellite_sends_sat_and_verifies() -> None:
+    client = make_client(
+        create_lab={"status": "success"},
+        get_lab={"status": "success", "data": {"sat": "1"}},
+    )
+
+    result = await labs.create_lab(client, "/User1", "clustertest", satellite="satellite1")
+
+    client.create_lab.assert_awaited_once_with(
+        "/User1", "clustertest", version="1", author="", description="", body="", sat="1"
+    )
+    client.get_lab.assert_awaited_once_with("/User1/clustertest.unl")
+    assert "warning" not in result
+
+
+async def test_create_lab_warns_when_satellite_not_stored() -> None:
+    client = make_client(
+        create_lab={"status": "success"},
+        get_lab={"status": "success", "data": {"sat": "-1"}},
+    )
+
+    result = await labs.create_lab(client, "/User1/", "clustertest", satellite="satellite2")
+
+    client.get_lab.assert_awaited_once_with("/User1/clustertest.unl")
+    assert "did not apply the satellite" in result["warning"]
+
+
+async def test_create_lab_without_satellite_sends_no_sat_and_skips_verify() -> None:
+    client = make_client(create_lab={"status": "success"})
+
+    await labs.create_lab(client, "/User1", "plain")
+
+    assert "sat" not in client.create_lab.await_args.kwargs
+    client.get_lab.assert_not_awaited()
+
+
+async def test_create_lab_invalid_satellite_creates_nothing() -> None:
+    client = make_client()
+
+    result = await labs.create_lab(client, "/User1", "x", satellite="bogus")
+
+    assert result["status"] == "error"
+    client.create_lab.assert_not_awaited()
+
+
+async def test_edit_lab_satellite_sends_sat_and_verifies() -> None:
+    client = make_client(
+        edit_lab={"status": "success"},
+        get_lab={"status": "success", "data": {"sat": "0"}},
+    )
+
+    result = await labs.edit_lab(client, "/User1/Lab 1.unl", satellite="master")
+
+    client.edit_lab.assert_awaited_once_with("/User1/Lab 1.unl", sat="0")
+    assert "warning" not in result
+
+
+async def test_edit_lab_satellite_verify_failure_is_a_warning_not_an_error() -> None:
+    client = make_client(edit_lab={"status": "success"})
+    client.get_lab.side_effect = RuntimeError("boom")
+
+    result = await labs.edit_lab(client, "/User1/Lab 1.unl", satellite="any")
+
+    assert result["status"] == "success"
+    assert "Could not re-read" in result["warning"]
