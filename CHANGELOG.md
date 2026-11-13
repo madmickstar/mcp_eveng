@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-13
+
+### Fixed
+- **Cisco c8000v (and other qemu) nodes added by `add_lab_node` never booted.**
+  Root cause (EVE-NG PRO 7.2.0-18, 26.01.01 / 17.18.02 images): the tool
+  defaulted the startup configuration to `"Unconfigured"`, which is a valid
+  value for iol/dynamips nodes but not for qemu nodes. A c8000v created that
+  way started, then fell back to status 0 within seconds with a dead console
+  (telnet `Errno 111`). Every GUI-created qemu node carries the numeric
+  `config` `"0"` (the GUI's "Default"), and the identical node created with
+  `"0"` boots normally; image, RAM, CPU, NIC count, `cpulimit` and QEMU
+  options were all ruled out. `add_lab_node` now defaults `config` by node
+  type: `"0"` for qemu, `"Unconfigured"` for iol/dynamips. An explicit
+  `config` is still sent exactly as given.
+- `config` on `add_lab_node` / `edit_lab_node` now also accepts an integer
+  (e.g. `0`) and sends it as a string. Previously an agent passing `0`, the
+  form EVE-NG itself uses, was rejected by argument validation.
+
+### Changed
+- `config` docs on `add_lab_node` / `edit_lab_node` explain the per-type
+  values and warn that `"Unconfigured"`/`"Saved"` on a qemu node can prevent
+  it from booting.
+
+### Notes
+- Not changed: `config="0"` gets no bootstrap medium. c8000v nodes intended
+  as SD-WAN cEdges still need a cloud-init/`config.iso` bootstrap
+  (`uuid`, `otp`, `vbond`, `org`) to join vManage.
+
 ## [0.9.3] - 2026-10-09
 
 ### Changed
