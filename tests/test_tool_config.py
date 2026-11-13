@@ -117,24 +117,24 @@ def test_tools_env_comm_example_lists_user_management_tools_same_as_pro() -> Non
         assert comm_raw[tool] == pro_raw[tool] == "disabled"
 
 
-def test_tools_env_comm_example_has_full_parity_with_pro_except_four_tools() -> None:
+def test_tools_env_comm_example_has_full_parity_with_pro_except_five_tools() -> None:
     # The two files must list exactly the same set of tools -- Community
     # only differs from PRO in *values*, never in which tools are even
     # mentioned, except for export_node/share_lab/set_link_quality/
-    # get_link_quality, which can't be safely omitted the way a
-    # _DEFAULT_DISABLED tool could: none of the four is in that set, so
+    # get_link_quality/list_satellites (clustering is PRO-only), which can't be safely omitted the way a
+    # _DEFAULT_DISABLED tool could: none of the five is in that set, so
     # omitting their lines would make them enabled by default -- the
-    # opposite of intended -- so they're the only four genuinely
+    # opposite of intended -- so they're the only five genuinely
     # edition-gated lines in the file.
     pro_raw = dotenv_values(_REPO_ROOT / "tools.env.pro.example")
     comm_raw = dotenv_values(_REPO_ROOT / "tools.env.comm.example")
 
     assert set(pro_raw.keys()) == set(comm_raw.keys())
     differing = {k for k in pro_raw if pro_raw[k] != comm_raw[k]}
-    assert differing == {"export_node", "share_lab", "set_link_quality", "get_link_quality"}
+    assert differing == {"export_node", "share_lab", "set_link_quality", "get_link_quality", "list_satellites"}
 
 
-def test_tools_env_comm_example_disables_exactly_thirteen_tools() -> None:
+def test_tools_env_comm_example_disables_exactly_fourteen_tools() -> None:
     # End-to-end functional check via make_enabled_predicate (what
     # actually gets registered), not just individual assertions: exactly
     # the six user-management tools plus
@@ -150,6 +150,7 @@ def test_tools_env_comm_example_disables_exactly_thirteen_tools() -> None:
         "get_node_template",
         "list_network_types",
         "list_user_roles",
+        "list_satellites",
         "list_tools",
         "list_folder",
         "add_folder",
@@ -208,4 +209,5 @@ def test_tools_env_comm_example_disables_exactly_thirteen_tools() -> None:
         "delete_lab",
         "list_captures",
         "get_capture",
+        "list_satellites",
     }

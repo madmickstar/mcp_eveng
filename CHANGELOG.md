@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-11-13
+
+### Added
+- **`list_satellites` tool** (PRO): `GET /api/clusterfull`, returning each
+  cluster member's id, name and online flag (public keys are dropped).
+  `create_lab`/`edit_lab` check `satellite` against this live list, so a
+  satellite the cluster does not have (e.g. `satellite4` on a cluster with
+  satellite1-3) is refused up front with the available names and nothing is
+  created, instead of EVE-NG silently falling back to `any`. An offline
+  satellite adds a `warning`. If the list cannot be fetched the static
+  name -> id mapping is used. `tools.env.comm.example` disables it.
+
 ## [0.9.5] - 2026-11-13
 
 ### Added

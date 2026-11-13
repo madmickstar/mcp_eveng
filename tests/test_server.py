@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "get_node_template",
     "list_network_types",
     "list_user_roles",
+    "list_satellites",
     "list_folder",
     "add_folder",
     "move_folder",

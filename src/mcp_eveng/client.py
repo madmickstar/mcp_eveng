@@ -256,6 +256,14 @@ class EvengClient:
     async def list_user_roles(self) -> JsonDict:
         return await self._get("/list/roles")
 
+    async def list_satellites(self) -> JsonDict:
+        """EVE-NG PRO cluster members (the list behind a lab's Satellite dropdown).
+
+        `GET /api/clusterfull`, confirmed from a live PRO 7.2.0-18 cluster's own
+        GUI traffic. `data` maps an index to `{id, name, pubkey, online}`.
+        """
+        return await self._get("/clusterfull")
+
     # -- folders -----------------------------------------------------------
 
     async def list_folder(self, path: str = "/") -> JsonDict:

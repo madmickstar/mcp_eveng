@@ -218,3 +218,35 @@ async def test_eve_list_user_roles_delegates_to_client() -> None:
 
     client.list_user_roles.assert_awaited_once_with()
     assert result["data"]["admin"] == "Administrator"
+
+
+async def test_list_satellites_normalizes_and_drops_pubkeys() -> None:
+    from mcp_eveng.tools import system
+
+    client = AsyncMock()
+    client.list_satellites.return_value = {
+        "status": "success",
+        "data": {
+            "2": {"id": "1", "name": "satellite1", "pubkey": "SECRETISH", "online": 1},
+            "0": {"id": "-1", "name": "any", "pubkey": "", "online": 1},
+            "1": {"id": "0", "name": "master", "pubkey": "", "online": "0"},
+        },
+    }
+
+    result = await system.list_satellites(client)
+
+    assert result["data"] == [
+        {"id": "-1", "name": "any", "online": 1},
+        {"id": "0", "name": "master", "online": 0},
+        {"id": "1", "name": "satellite1", "online": 1},
+    ]
+    assert "SECRETISH" not in str(result)
+
+
+async def test_list_satellites_reports_error_on_unexpected_shape() -> None:
+    from mcp_eveng.tools import system
+
+    client = AsyncMock()
+    client.list_satellites.return_value = {"status": "success", "data": "nope"}
+
+    assert (await system.list_satellites(client))["status"] == "error"

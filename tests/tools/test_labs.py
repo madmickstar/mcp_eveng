@@ -768,3 +768,75 @@ async def test_edit_lab_satellite_verify_failure_is_a_warning_not_an_error() -> 
 
     assert result["status"] == "success"
     assert "Could not re-read" in result["warning"]
+
+
+# -- live satellite list ---------------------------------------------------------
+
+_CLUSTER = {
+    "status": "success",
+    "data": {
+        "1": {"id": "0", "name": "master", "pubkey": "", "online": 1},
+        "0": {"id": "-1", "name": "any", "pubkey": "", "online": 1},
+        "2": {"id": "1", "name": "satellite1", "pubkey": "k1", "online": 1},
+        "3": {"id": "2", "name": "satellite2", "pubkey": "k2", "online": 0},
+        "4": {"id": "3", "name": "satellite3", "pubkey": "k3", "online": 1},
+    },
+}
+
+
+async def test_create_lab_refuses_satellite_the_cluster_does_not_have() -> None:
+    client = make_client(list_satellites=_CLUSTER)
+
+    result = await labs.create_lab(client, "/User1", "test-cluster-id4", satellite="satellite4")
+
+    assert result["status"] == "error"
+    assert "satellite4" in result["message"]
+    assert "satellite3 (id 3)" in result["message"]
+    assert "Nothing was created" in result["message"]
+    client.create_lab.assert_not_awaited()
+
+
+async def test_create_lab_uses_live_list_and_warns_when_offline() -> None:
+    client = make_client(
+        list_satellites=_CLUSTER,
+        create_lab={"status": "success"},
+        get_lab={"status": "success", "data": {"sat": "2"}},
+    )
+
+    result = await labs.create_lab(client, "/User1", "x", satellite="Satellite2")
+
+    assert client.create_lab.await_args.kwargs["sat"] == "2"
+    assert "offline" in result["warning"]
+
+
+async def test_edit_lab_refuses_unknown_satellite_without_editing() -> None:
+    client = make_client(list_satellites=_CLUSTER)
+
+    result = await labs.edit_lab(client, "/User1/Lab 1.unl", satellite=9)
+
+    assert result["status"] == "error"
+    client.edit_lab.assert_not_awaited()
+
+
+async def test_satellite_falls_back_to_static_mapping_when_list_unavailable() -> None:
+    client = make_client(create_lab={"status": "success"}, get_lab={"status": "success", "data": {"sat": "4"}})
+    client.list_satellites.side_effect = RuntimeError("404")
+
+    await labs.create_lab(client, "/User1", "x", satellite="satellite4")
+
+    assert client.create_lab.await_args.kwargs["sat"] == "4"
+
+
+async def test_satellite_matches_custom_names_from_live_list() -> None:
+    cluster = {
+        "data": {"0": {"id": "-1", "name": "any", "online": 1}, "1": {"id": "7", "name": "lab-east", "online": 1}}
+    }
+    client = make_client(
+        list_satellites=cluster,
+        create_lab={"status": "success"},
+        get_lab={"status": "success", "data": {"sat": "7"}},
+    )
+
+    await labs.create_lab(client, "/User1", "x", satellite="lab-east")
+
+    assert client.create_lab.await_args.kwargs["sat"] == "7"

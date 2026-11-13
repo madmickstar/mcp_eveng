@@ -294,6 +294,7 @@ and why these six specifically differ.
 | | `get_node_template` | Gets details for a single node template, including its images. | ✅ | ✅ |
 | | `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). | ✅ | ✅ |
 | | `list_user_roles` | Lists available user roles. Disabled by default. | ✅ | ✅ |
+| | `list_satellites` | Lists the cluster's satellites (id, name, online); `create_lab`/`edit_lab` check `satellite` against it. | ❌ | ✅ |
 | Server introspection | `list_tools` | Lists the tools published by the MCP server. | ✅ | ✅ |
 | Folders | `list_folder` | Lists the contents of a folder. | ✅ | ✅ |
 | | `add_folder` | Creates a new folder. | ✅ | ✅ |
