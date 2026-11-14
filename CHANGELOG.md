@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-11-15
+
+### Fixed
+- **Intermittent `User is not authenticated or session timed out (90001)` (HTTP 412)
+  when several tool calls ran at once.** EVE-NG allows one active session per
+  user: a second login disables the first. When the session had expired, every
+  concurrent call noticed independently and each logged in again, so the
+  later logins killed the earlier callers' brand-new sessions and their single
+  retry failed with 90001 (visible in the logs as two parallel calls each
+  `GET 412 -> POST /auth/login -> GET 412`). Re-login is now serialised and
+  shared: calls that failed under an expired session wait for one login and
+  reuse it, and concurrent first-time `ensure_authenticated()` calls share a
+  single initial login. A genuinely dead session (e.g. the same account
+  logging in from the GUI or another tool) still gets one relogin and retry.
+
+### Notes
+- This cannot stop *another* client using the same EVE-NG account (the web
+  GUI, another MCP server, a script) from invalidating this server's session;
+  that costs one transparent relogin, but two clients logging in against each
+  other at the same moment can still collide. Giving the MCP server its own
+  EVE-NG user avoids it entirely.
+
 ## [0.9.7] - 2026-11-13
 
 ### Fixed

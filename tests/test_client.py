@@ -904,3 +904,98 @@ async def test_list_all_folders_respects_max_folders(client: EvengClient, base_u
 
     assert len(httpx_mock.get_requests()) == 2
     assert {f["path"] for f in folders} == {"/A", "/B"}
+
+
+# -- concurrent relogin (EVE-NG allows one active session per user) ---------------
+
+
+class _SingleSessionEve:
+    """Fake EVE-NG that, like the real one, kills the old session on every new login."""
+
+    def __init__(self, *, login_delay: float = 0.05) -> None:
+        import itertools
+
+        self.login_delay = login_delay
+        self.current = "server-side-session"  # the client's cookie jar starts empty/stale
+        self.logins = 0
+        self._ids = itertools.count(1)
+
+    async def __call__(self, request):  # type: ignore[no-untyped-def]
+        import asyncio
+
+        import httpx
+
+        if request.url.path.endswith("/auth/login"):
+            await asyncio.sleep(self.login_delay)  # a real login takes a while
+            self.logins += 1
+            self.current = f"session-{next(self._ids)}"
+            return httpx.Response(
+                200,
+                json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+                headers={"Set-Cookie": f"unetlab_session={self.current}; Path=/"},
+            )
+        if f"unetlab_session={self.current}" not in request.headers.get("cookie", ""):
+            return httpx.Response(
+                412,
+                json={
+                    "code": 412,
+                    "status": "unauthorized",
+                    "message": "User is not authenticated or session timed out (90001).",
+                },
+            )
+        await asyncio.sleep(0.01)
+        return httpx.Response(200, json={"code": 200, "status": "success", "data": {"path": request.url.path}})
+
+
+async def test_concurrent_calls_on_expired_session_share_one_relogin(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    """Regression: two calls hitting an expired session both re-logged in; the second login
+    killed the first's fresh session, so its retry failed with 90001."""
+    import asyncio
+
+    import httpx
+
+    eve = _SingleSessionEve()
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+    c._authenticated = True  # believes it is logged in; the server's session is gone
+
+    results = await asyncio.gather(*(c._get(f"/labs/x/nodes/{i}") for i in range(5)))
+
+    assert len(results) == 5
+    assert all(r["status"] == "success" for r in results)
+    assert eve.logins == 1
+    await http.aclose()
+
+
+async def test_concurrent_first_calls_share_one_initial_login(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    import httpx
+
+    eve = _SingleSessionEve()
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+
+    await asyncio.gather(*(c.ensure_authenticated() for _ in range(4)))
+    result = await c._get("/status")
+
+    assert eve.logins == 1
+    assert result["status"] == "success"
+    await http.aclose()
+
+
+async def test_session_killed_by_another_login_still_recovers_with_one_relogin(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    """Someone else (GUI, another tool) logging in as the same user kills our session: one relogin fixes it."""
+    import httpx
+
+    eve = _SingleSessionEve(login_delay=0)
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+    await c.ensure_authenticated()
+    assert (await c._get("/status"))["status"] == "success"
+
+    eve.current = "someone-elses-session"  # the other login
+    assert (await c._get("/status"))["status"] == "success"
+
+    assert eve.logins == 2  # ours at start + one relogin; not one per request
+    await http.aclose()

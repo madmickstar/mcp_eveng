@@ -28,6 +28,7 @@ transparently (re)authenticates on first use.
 
 from __future__ import annotations
 
+import asyncio
 from types import TracebackType
 from typing import Any
 from urllib.parse import quote
@@ -80,6 +81,13 @@ class EvengClient:
             verify=self._settings.verify_ssl,
         )
         self._authenticated = False
+        # EVE-NG allows ONE active session per user: a second login kills the
+        # first. So concurrent calls that all find the session expired must
+        # share ONE relogin. `_session_gen` counts completed logins; a request
+        # remembers the generation it was sent under, and after a 412/400/401
+        # only logs in if nobody else already has since (see `_relogin`).
+        self._login_lock = asyncio.Lock()
+        self._session_gen = 0
 
     # -- lifecycle -----------------------------------------------------
 
@@ -109,6 +117,7 @@ class EvengClient:
         params: JsonDict | None = None,
         auto_login: bool = True,
     ) -> JsonDict | None:
+        sent_gen = self._session_gen
         response = await self._http.request(method, path, json=json, params=params)
         payload: JsonDict | None
         try:
@@ -159,8 +168,7 @@ class EvengClient:
         # to detect from the response body alone.
         needs_relogin = auto_login and response.status_code in (400, 401, 412)
         if needs_relogin:
-            self._authenticated = False
-            await self.login()
+            await self._relogin(sent_gen)
             return await self._request(method, path, json=json, params=params, auto_login=False)
 
         if payload is None:
@@ -221,7 +229,23 @@ class EvengClient:
         if result is None:
             raise EvengAuthError("Login failed: empty response from EVENG")
         self._authenticated = True
+        self._session_gen += 1
         return result
+
+    async def _relogin(self, sent_gen: int) -> None:
+        """Re-authenticate after a request failed as unauthenticated, once for all concurrent callers.
+
+        `sent_gen` is the session generation the failed request was sent under.
+        Callers are serialised; if another caller has already logged in since
+        (the generation moved on), this one just reuses that fresh session
+        instead of logging in again -- a second login would invalidate the
+        first caller's brand-new session and make its retry fail with 90001.
+        """
+        async with self._login_lock:
+            if self._session_gen != sent_gen:
+                return
+            self._authenticated = False
+            await self.login()
 
     async def logout(self) -> JsonDict:
         # Deliberately calls `_request` directly, not `_get` -- `_get` now
@@ -236,8 +260,12 @@ class EvengClient:
         return await self._get("/auth")
 
     async def ensure_authenticated(self) -> None:
-        if not self._authenticated:
-            await self.login()
+        if self._authenticated:
+            return
+        sent_gen = self._session_gen
+        async with self._login_lock:
+            if not self._authenticated and self._session_gen == sent_gen:
+                await self.login()
 
     # -- system ------------------------------------------------------------
 
