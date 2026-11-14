@@ -64,11 +64,9 @@ async def test_not_found_raises_not_found_error(client: EvengClient, base_url: s
 
 
 async def test_generic_api_error(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
-    # The client's own relogin-on-400 behavior (see client.py's _request,
-    # and docs/tools-reference.md's "Sessions and relogin" note) means
-    # a genuine validation failure still triggers one login attempt +
-    # retry before the error is finally raised, not a single request --
-    # this test mocks that full sequence rather than assuming one call.
+    # An ambiguous bare 400 first checks whether the session is still alive
+    # (GET /auth). It is, so this is a genuine rejection: raised straight away,
+    # with NO relogin (see test_genuine_400_does_not_relogin_when_session_alive).
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/labs",
@@ -76,15 +74,9 @@ async def test_generic_api_error(client: EvengClient, base_url: str, httpx_mock:
         json={"code": 400, "status": "fail", "message": "Bad request"},
     )
     httpx_mock.add_response(
-        method="POST",
-        url=f"{base_url}/auth/login",
-        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
-    )
-    httpx_mock.add_response(
-        method="POST",
-        url=f"{base_url}/labs",
-        status_code=400,
-        json={"code": 400, "status": "fail", "message": "Bad request"},
+        method="GET",
+        url=f"{base_url}/auth",
+        json={"code": 200, "status": "success", "message": "User checked (90019)."},
     )
 
     with pytest.raises(EvengAPIError):
@@ -362,6 +354,13 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
         status_code=400,
         json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
     )
+    # whoami confirms the session really is gone (EVE-NG returns 401 for /auth only)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/auth",
+        status_code=401,
+        json={"code": 401, "status": "unauthorized", "message": "User is not authenticated (90001)."},
+    )
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/auth/login",
@@ -378,19 +377,44 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
     assert result["message"] == "Node stopped (80051)."
 
 
-async def test_genuine_validation_400_reproduces_same_error_after_retry(
+async def test_genuine_400_does_not_relogin_when_session_alive(
     client: EvengClient, base_url: str, httpx_mock: HTTPXMock
 ) -> None:
-    # A real, non-auth-related 400 (bad parameters) still gets one
-    # wasted relogin-retry under the broadened check -- accepted
-    # trade-off -- but must surface the SAME final error, not something
-    # different or a silent success.
+    # A real, non-auth 400 (bad parameters, or EVE-NG's generic "Request not
+    # valid (60027)" on a node action) while GET /auth says the session is
+    # fine: surface the SAME error immediately and do NOT log in again. A
+    # relogin cannot help, and it would log the same account out of the GUI.
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/list/templates/bogus-template",
         status_code=400,
         json={"code": 60033, "status": "fail", "message": "Requested template is not valid (60033)."},
     )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/auth",
+        json={"code": 200, "status": "success", "message": "User checked (90019)."},
+    )
+
+    with pytest.raises(EvengAPIError) as exc_info:
+        await client.get_node_template("bogus-template")
+
+    assert "not valid" in str(exc_info.value).lower()
+    assert not [r for r in httpx_mock.get_requests() if r.url.path.endswith("/auth/login")]
+
+
+async def test_400_when_session_probe_fails_still_relogins(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # If we cannot positively confirm the session is alive (here the probe
+    # errors), fall back to the old behaviour: one relogin and retry.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
+        status_code=400,
+        json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
+    )
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", status_code=500, text="boom")
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/auth/login",
@@ -398,15 +422,13 @@ async def test_genuine_validation_400_reproduces_same_error_after_retry(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/list/templates/bogus-template",
-        status_code=400,
-        json={"code": 60033, "status": "fail", "message": "Requested template is not valid (60033)."},
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
+        json={"code": 200, "status": "success", "message": "Node stopped (80051)."},
     )
 
-    with pytest.raises(EvengAPIError) as exc_info:
-        await client.get_node_template("bogus-template")
+    result = await client.stop_node("/User1/Lab 1.unl", 3)
 
-    assert "not valid" in str(exc_info.value).lower()
+    assert result["message"] == "Node stopped (80051)."
 
 
 async def test_ensure_authenticated_only_logs_in_once(

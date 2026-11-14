@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-11-15
+
+### Fixed
+- **A genuine `400` no longer triggers a pointless relogin.** Every bare
+  `400` used to log in again and retry, even when the session was fine
+  (observed: `stop_node` / `change_node_delay` failing with `Request not
+  valid (60027)` on c8000v nodes, each costing an extra 1-2 second login and
+  an identical second failure). Because EVE-NG allows one session per user,
+  each of those relogins also logged the same account out of the web GUI.
+  A bare `400` now first checks `GET /auth`: if the session is still alive
+  the error is raised immediately with no relogin; if it is gone (or the
+  check is inconclusive) behaviour is unchanged (one relogin and retry).
+  `400` bodies that say `unauthorized`, `401` and `412` are unaffected.
+
+### Notes
+- This does **not** fix the underlying `60027` refusal of `stop` on some
+  nodes (see README "Known issues"); it makes that failure fast and stops it
+  disturbing other sessions.
+
 ## [0.9.8] - 2026-11-15
 
 ### Fixed

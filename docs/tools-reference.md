@@ -82,15 +82,24 @@ failure. An earlier version of this project's relogin check looked for
 the documented `status: "unauthorized"` marker and missed this exact case
 because of that gap between documented and observed behavior.
 
-`EvengClient` now retries once, transparently, on **any** `400` or `401`
-response — trusting the HTTP status code alone, not the response body.
-The trade-off, accepted deliberately: a genuine validation failure
-unrelated to auth (e.g. an invalid template name) also gets one wasted
-relogin-retry under this broader check, since relogging in obviously
-doesn't fix bad parameters — but it reproduces the identical final error
-either way, just with one extra round-trip. That's a better trade than
-silently missing real session invalidation, which is now confirmed to
-happen in exactly the shared-account workflow described above.
+`EvengClient` retries once, transparently, after a `401`, a `412` or a `400`
+that says `status: "unauthorized"`. A **bare** `400` (generic `"fail"`, e.g.
+`"Request not valid (60027)."`) is ambiguous, so the client first asks EVE-NG
+whether the session is still valid (`GET /auth`, which EVE-NG special-cases to
+answer `401` when it is not):
+
+- session gone (the invalidated-by-another-login case above) → one relogin and
+  one retry;
+- session still alive → the `400` is a genuine rejection of that request
+  (an invalid template name, or `stop` refused on a stuck node). It is raised
+  immediately with **no relogin**: logging in cannot fix it, costs a couple of
+  seconds, and, because EVE-NG allows one session per user, would log the
+  same account out of the web GUI and any other client;
+- the probe itself fails or is unclear → the old behaviour (relogin + retry).
+
+Concurrent calls that all find the session expired share **one** relogin
+rather than each logging in (a second login would invalidate the first
+caller's fresh session and its retry would fail with `90001`).
 
 A **third**, undocumented status code means exactly the same thing:
 confirmed by reading EVE-NG's own PHP source

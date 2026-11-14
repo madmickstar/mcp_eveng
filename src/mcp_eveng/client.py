@@ -167,6 +167,19 @@ class EvengClient:
         # is confirmed to happen and previously had no reliable signal
         # to detect from the response body alone.
         needs_relogin = auto_login and response.status_code in (400, 401, 412)
+        if (
+            needs_relogin
+            and response.status_code == 400
+            and not (isinstance(payload, dict) and payload.get("status") == "unauthorized")
+            and await self._session_is_alive()
+        ):
+            # An ambiguous bare 400 ("Request not valid (60027)" etc.) while
+            # the session is demonstrably still valid is a genuine rejection
+            # of THIS request, not an auth problem. Do not relogin: it cannot
+            # help (the retry fails identically), costs a couple of seconds,
+            # and -- since EVE-NG allows one session per user -- logs the same
+            # account out of the web GUI or any other client.
+            needs_relogin = False
         if needs_relogin:
             await self._relogin(sent_gen)
             return await self._request(method, path, json=json, params=params, auto_login=False)
@@ -231,6 +244,20 @@ class EvengClient:
         self._authenticated = True
         self._session_gen += 1
         return result
+
+    async def _session_is_alive(self) -> bool:
+        """True only if EVE-NG definitively says this session is still logged in.
+
+        Uses `GET /auth` (whoami), which EVE-NG special-cases to return 401
+        (not 412) when the session is gone. Anything other than a clean
+        success -- 401, an auth error, a network problem, an odd body -- is
+        reported as "not alive", which keeps the old behaviour (relogin).
+        """
+        try:
+            result = await self._request("GET", "/auth", auto_login=False)
+        except Exception:  # noqa: BLE001 -- unknown means "assume dead", the safe old behaviour
+            return False
+        return isinstance(result, dict) and result.get("status") == "success"
 
     async def _relogin(self, sent_gen: int) -> None:
         """Re-authenticate after a request failed as unauthenticated, once for all concurrent callers.

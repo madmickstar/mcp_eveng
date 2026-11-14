@@ -472,7 +472,9 @@ for what that means in practice and how `EvengClient` handles it.
 `edit_lab_node`, `change_node_delay`, `edit_lab_nodes_by_template`,
 `connect_interface` on Community edition) can fail persistently on
 certain nodes with `"Request not valid (60027)."`, with no way found so
-far to make that specific node stoppable again through the API.
+far to make that specific node stoppable again through the API. A failed
+stop no longer triggers a relogin (since 0.9.9), so it fails fast and does not
+log the same account out of the web GUI.
 
 ## Development
 
