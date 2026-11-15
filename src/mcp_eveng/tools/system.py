@@ -104,6 +104,45 @@ async def list_user_roles(client: EvengClient) -> dict[str, Any]:
     return await client.list_user_roles()
 
 
+def satellite_entries(result: Any) -> list[dict[str, Any]] | None:
+    """Normalize a `/clusterfull` response to `[{id, name, online}, ...]` (public keys dropped).
+
+    Returns None when the response is not in the expected shape, so callers
+    can tell "no satellite data" from "an empty cluster".
+    """
+    data = result.get("data") if isinstance(result, dict) else None
+    if isinstance(data, dict):
+        rows: list[Any] = list(data.values())
+    elif isinstance(data, list):
+        rows = data
+    else:
+        return None
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or "id" not in row or "name" not in row:
+            continue
+        online = row.get("online")
+        entries.append({"id": str(row["id"]), "name": str(row["name"]), "online": 1 if str(online) == "1" else 0})
+    entries.sort(key=lambda e: int(e["id"]) if e["id"].lstrip("-").isdigit() else 10**6)
+    return entries
+
+
+async def list_satellites(client: EvengClient) -> dict[str, Any]:
+    """List the cluster's satellites (PRO): id, name and online flag for each."""
+    result = await client.list_satellites()
+    entries = satellite_entries(result)
+    if entries is None:
+        return {
+            "status": "error",
+            "message": "EVE-NG returned no satellite list (this needs a PRO server with clustering).",
+        }
+    return {
+        "status": "success",
+        "message": "Satellites (use the name, or the id, as `satellite` in create_lab/edit_lab).",
+        "data": entries,
+    }
+
+
 def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]) -> None:
     if enabled("get_status"):
 
@@ -166,3 +205,14 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
         async def _list_user_roles() -> dict[str, Any]:
             """List valid EVENG user roles (admin, editor, user)."""
             return await list_user_roles(await get_client())
+
+    if enabled("list_satellites"):
+
+        @mcp.tool(name="list_satellites")
+        async def _list_satellites() -> dict[str, Any]:
+            """List the cluster's satellites (EVE-NG PRO): id, name and online flag.
+
+            "any" (id -1) and "master" (id 0) are included. Use a name or id
+            as `satellite` in create_lab / edit_lab.
+            """
+            return await list_satellites(await get_client())

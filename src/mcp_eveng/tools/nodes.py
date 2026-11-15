@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
@@ -167,6 +168,37 @@ def _template_extra_options(options: dict[str, Any]) -> dict[str, Any]:
     return extra
 
 
+# EVE-NG stores a node's startup configuration differently per node type.
+# iol/dynamips nodes use the strings "Unconfigured" / "Saved". qemu nodes use
+# the numeric "0" (the GUI's "Default"). A qemu node created with
+# "Unconfigured"/"Saved" can fail to boot: observed live on EVE-NG PRO
+# 7.2.0-18, c8000v nodes (whose template runs a prep script and mounts a
+# config.iso) start, then fall back to status 0 within seconds with a dead
+# console, while the identical node with config "0" boots normally.
+_QEMU_DEFAULT_CONFIG = "0"
+_NON_QEMU_DEFAULT_CONFIG = "Unconfigured"
+
+
+def _normalize_config(config: str | int | None) -> str | None:
+    """Return `config` as a stripped string, or None when unset/blank.
+
+    Accepts an int (e.g. 0) because agents often send the numeric form
+    EVE-NG itself uses for qemu nodes; the API wants a string.
+    """
+    if config is None:
+        return None
+    text = str(config).strip()
+    return text or None
+
+
+def _resolve_add_config(config: str | int | None, node_type: str) -> str:
+    """Pick the startup config for a new node: the caller's value, else a per-type default."""
+    explicit = _normalize_config(config)
+    if explicit is not None:
+        return explicit
+    return _QEMU_DEFAULT_CONFIG if node_type == "qemu" else _NON_QEMU_DEFAULT_CONFIG
+
+
 # -- template search (id / name / vendor, case-insensitive substring) --------
 
 
@@ -278,7 +310,7 @@ async def add_lab_node(
     node_type: str | None = None,
     name: str | None = None,
     image: str | None = None,
-    config: str = "Unconfigured",
+    config: str | int | None = None,
     left: str | int | None = None,
     top: str | int | None = None,
     ram: int | None = None,
@@ -320,6 +352,13 @@ async def add_lab_node(
     again with `image` set to the one you want. If it has exactly one
     image (or you already specified one), it proceeds directly with no
     prompt.
+
+    Startup config (`config`): when omitted, qemu nodes get "0" (the GUI's
+    "Default") and iol/dynamips nodes get "Unconfigured". This matters: a
+    qemu node created with "Unconfigured"/"Saved" can start and then die
+    within seconds with a dead console (observed: c8000v on EVE-NG PRO
+    7.2.0-18), while "0" boots normally. An explicit value is always sent
+    as given.
 
     Canvas position (`left`/`top`) is auto-placed when not explicitly
     given: left to right, 5 nodes per row, 100 units apart, starting at
@@ -427,7 +466,7 @@ async def add_lab_node(
             template=resolved_template,
             name=resolved_name,
             image=resolved_image,
-            config=config,
+            config=_resolve_add_config(config, resolved_node_type),
             icon=resolved_icon,
             left=resolved_left,
             top=resolved_top,
@@ -623,7 +662,7 @@ async def edit_lab_node(
     cpulimit: int | None = None,
     ethernet: int | None = None,
     console: str | None = None,
-    config: str | None = None,
+    config: str | int | None = None,
     left: str | int | None = None,
     top: str | int | None = None,
     delay: int | None = None,
@@ -690,7 +729,7 @@ async def edit_lab_node(
                 "cpulimit": cpulimit,
                 "ethernet": ethernet,
                 "console": console,
-                "config": config,
+                "config": _normalize_config(config),
                 "left": normalize_coordinate(left),
                 "top": normalize_coordinate(top),
                 "delay": delay,
@@ -1864,6 +1903,38 @@ async def _all_node_ids_and_names(client: EvengClient, lab_path: str) -> list[tu
     return pairs
 
 
+_STOPMODE_NAMES = {
+    "graceful": 0,
+    "shutdown": 0,
+    "poweroff": 1,
+    "power off": 1,
+    "power_off": 1,
+    "hard": 1,
+    "hibernate": 2,
+    "auto": 3,
+    "automatic": 3,
+    "default": 3,
+}
+
+
+def _resolve_stopmode(value: str | int | None) -> int | None:
+    """Turn a stop mode name or number into EVE-NG's `stopmode` 0-3, or None if unset.
+
+    0 = graceful shutdown (ACPI/OS), 1 = hard power off, 2 = hibernate (PRO),
+    3 = automatic (the GUI's default "Stop"). Raises ValueError for anything else.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in _STOPMODE_NAMES:
+        return _STOPMODE_NAMES[text]
+    if text.isdigit() and int(text) in (0, 1, 2, 3):
+        return int(text)
+    raise ValueError(f"Unknown stop mode {value!r}: use 'graceful' (0), 'poweroff' (1), 'hibernate' (2) or 'auto' (3).")
+
+
 async def _loop_node_action(
     lab_path: str,
     nodes: list[tuple[int, str]],
@@ -1935,18 +2006,30 @@ async def start_node(client: EvengClient, lab_path: str, node_id: int | None = N
         return await _loop_node_action(lab_path, nodes, client.start_node, "started")
 
 
-async def stop_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
+async def stop_node(
+    client: EvengClient,
+    lab_path: str,
+    node_id: int | None = None,
+    stopmode: str | int | None = None,
+) -> dict[str, Any]:
     """Stop one node, or every node in the lab if `node_id` is omitted.
 
     Stopping every node loops through each one individually rather than
     using EVE-NG's bulk `/nodes/stop` endpoint -- see `_loop_node_action`
-    for why.
+    for why. `stopmode` (optional): graceful / poweroff / hibernate / auto,
+    or 0-3; omitted = chosen automatically for the server's edition.
     """
+    try:
+        mode = _resolve_stopmode(stopmode)
+    except ValueError as exc:
+        return {"status": "error", "message": f"{exc} Nothing was stopped."}
+    kwargs: dict[str, Any] = {} if mode is None else {"stopmode": mode}
     async with lab_lock(lab_path):
         if node_id is not None:
-            return await client.stop_node(lab_path, node_id)
+            return await client.stop_node(lab_path, node_id, **kwargs)
         nodes = await _all_node_ids_and_names(client, lab_path)
-        return await _loop_node_action(lab_path, nodes, client.stop_node, "stopped")
+        action = client.stop_node if mode is None else functools.partial(client.stop_node, stopmode=mode)
+        return await _loop_node_action(lab_path, nodes, action, "stopped")
 
 
 async def wipe_node(
@@ -2058,7 +2141,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             node_type: str | None = None,
             name: str | None = None,
             image: str | None = None,
-            config: str = "Unconfigured",
+            config: str | int | None = None,
             left: str | int | None = None,
             top: str | int | None = None,
             ram: int | None = None,
@@ -2084,6 +2167,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             (status "selection_required") and asks you to pick one instead of
             guessing; with exactly one image, it proceeds directly.
 
+            Startup config defaults per node type: "0" for qemu, "Unconfigured"
+            for iol/dynamips (see `config` below).
+
             Canvas position auto-places when not given: left to right, 5
             nodes per row, 100 units apart starting at (100, 100), wrapping to
             a new row 100 below; skips any grid slot within 50 units of an
@@ -2100,7 +2186,13 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 name: Node display name. Defaults to the template's name/prefix.
                 image: Image filename from `get_node_template`. Required if the
                     template has more than one image; auto-filled if it has exactly one.
-                config: "Unconfigured" or "Saved".
+                config: Startup configuration. Omit it (recommended): qemu
+                    nodes (c8000v, vios, csr1000v, ...) then get "0" (the
+                    GUI's "Default") and iol/dynamips nodes get
+                    "Unconfigured". A qemu node created with "Unconfigured"
+                    or "Saved" can fail to boot (starts, then drops to
+                    status 0 with a dead console), so only pass those for
+                    iol/dynamips nodes.
                 left: Exact canvas position from the left, integer or numeric string
                     (e.g. 100 or "100"). Auto-placed if omitted.
                 top: Exact canvas position from the top, integer or numeric string
@@ -2163,7 +2255,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             cpulimit: int | None = None,
             ethernet: int | None = None,
             console: str | None = None,
-            config: str | None = None,
+            config: str | int | None = None,
             left: str | int | None = None,
             top: str | int | None = None,
             delay: int | None = None,
@@ -2224,7 +2316,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 cpulimit: New CPU limit toggle (0/1), if changing.
                 ethernet: New ethernet interface count, if changing.
                 console: New console type ("telnet"/"vnc"/"rdp"/"rdp-tls"), if changing.
-                config: New config state ("Unconfigured"/"Saved"), if changing.
+                config: New startup config, if changing: "0" (Default) for qemu
+                    nodes, "Unconfigured"/"Saved" for iol/dynamips. An integer
+                    such as 0 is accepted and sent as a string.
                 left: New canvas position from the left (integer or numeric string), if changing.
                 top: New canvas position from the top (integer or numeric string), if changing.
                 delay: New startup delay in seconds, if changing.
@@ -2562,7 +2656,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
     if enabled("stop_node"):
 
         @mcp.tool(name="stop_node")
-        async def _stop_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
+        async def _stop_node(
+            lab_path: str, node_id: int | None = None, stopmode: str | int | None = None
+        ) -> dict[str, Any]:
             """Stop one node, or every node in the lab if `node_id` is omitted.
 
             Stopping every node loops through each one individually
@@ -2572,8 +2668,17 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             Args:
                 lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to stop, or omit to stop all nodes.
+                stopmode: Optional. How to stop, matching the web UI's Stop
+                    menu: "auto" (3, the default "Stop": EVE-NG picks the
+                    best method for the node), "graceful" (0, ACPI/OS
+                    shutdown; only for guests that support it), "poweroff"
+                    (1, hard power off, e.g. Cisco routers), "hibernate"
+                    (2, PRO only: saves state). Omit it: the right form is
+                    chosen for the server's edition. On EVE-NG PRO the
+                    request must carry a stopmode or EVE-NG refuses it with
+                    "Request not valid (60027)"; this is handled for you.
             """
-            return await stop_node(await get_client(), lab_path, node_id)
+            return await stop_node(await get_client(), lab_path, node_id, stopmode)
 
     if enabled("wipe_node"):
 

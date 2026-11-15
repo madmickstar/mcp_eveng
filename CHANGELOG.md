@@ -7,6 +7,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-11-15
+
+### Fixed
+- **`stop_node` (and every tool that stops a node first) failed on EVE-NG PRO
+  with `Request not valid (60027)`.** PRO's single-node stop only accepts the
+  form the web UI itself sends, `GET /api/labs/<lab>/nodes/<id>/stop/stopmode=3`,
+  and refuses the documented plain `.../stop` with HTTP 400 while `start`
+  works on the same session (confirmed live on PRO 7.2.0-18 with the exact
+  request the UI sends; the same refusal is reported on other PRO versions).
+  The client now sends `.../stop/stopmode=3` on PRO and plain `.../stop` on
+  Community. If the first form is refused with the generic 400, the other is
+  tried once, and the one that worked is remembered. This also fixes the
+  stop step inside `edit_lab_node`, `change_node_delay`,
+  `edit_lab_nodes_by_template`, `wipe_node` flows and `connect_interface`
+  on Community.
+
+### Added
+- `stop_node` takes an optional `stopmode`: `auto`/3 (the UI's default
+  "Stop"), `graceful`/0 (ACPI/OS shutdown), `poweroff`/1 (hard power off),
+  `hibernate`/2 (PRO). An explicit value is sent exactly as given. Unknown
+  values are refused before anything is sent.
+
+### Notes
+- Stopping every node (`node_id` omitted) still loops per node; the bulk
+  `/nodes/stop` endpoint is unchanged and unused.
+
+## [0.9.9] - 2026-11-15
+
+### Fixed
+- **A genuine `400` no longer triggers a pointless relogin.** Every bare
+  `400` used to log in again and retry, even when the session was fine
+  (observed: `stop_node` / `change_node_delay` failing with `Request not
+  valid (60027)` on c8000v nodes, each costing an extra 1-2 second login and
+  an identical second failure). Because EVE-NG allows one session per user,
+  each of those relogins also logged the same account out of the web GUI.
+  A bare `400` now first checks `GET /auth`: if the session is still alive
+  the error is raised immediately with no relogin; if it is gone (or the
+  check is inconclusive) behaviour is unchanged (one relogin and retry).
+  `400` bodies that say `unauthorized`, `401` and `412` are unaffected.
+
+### Notes
+- This did not fix the underlying `60027` refusal of `stop`; that was the
+  missing `stopmode`, fixed in 0.9.10. It makes any genuine 400 fast and
+  stops it disturbing other sessions.
+
+## [0.9.8] - 2026-11-15
+
+### Fixed
+- **Intermittent `User is not authenticated or session timed out (90001)` (HTTP 412)
+  when several tool calls ran at once.** EVE-NG allows one active session per
+  user: a second login disables the first. When the session had expired, every
+  concurrent call noticed independently and each logged in again, so the
+  later logins killed the earlier callers' brand-new sessions and their single
+  retry failed with 90001 (visible in the logs as two parallel calls each
+  `GET 412 -> POST /auth/login -> GET 412`). Re-login is now serialised and
+  shared: calls that failed under an expired session wait for one login and
+  reuse it, and concurrent first-time `ensure_authenticated()` calls share a
+  single initial login. A genuinely dead session (e.g. the same account
+  logging in from the GUI or another tool) still gets one relogin and retry.
+
+### Notes
+- This cannot stop *another* client using the same EVE-NG account (the web
+  GUI, another MCP server, a script) from invalidating this server's session;
+  that costs one transparent relogin, but two clients logging in against each
+  other at the same moment can still collide. Giving the MCP server its own
+  EVE-NG user avoids it entirely.
+
+## [0.9.7] - 2026-11-13
+
+### Fixed
+- **Spurious `ConnectionResetError: [WinError 10054]` traceback in `--http`/`--sse`
+  logs on Windows.** After a successful tool call, when the client closed its
+  stream, Python's Windows `ProactorEventLoop` logged an ERROR traceback from
+  `_ProactorBasePipeTransport._call_connection_lost` (seen on Python 3.13).
+  The request had already completed; it was cosmetic. That one case (a
+  `ConnectionResetError` raised by the connection-lost callback) is now logged
+  at DEBUG. Every other event-loop error is still reported as before.
+
+## [0.9.6] - 2026-11-13
+
+### Added
+- **`list_satellites` tool** (PRO): `GET /api/clusterfull`, returning each
+  cluster member's id, name and online flag (public keys are dropped).
+  `create_lab`/`edit_lab` check `satellite` against this live list, so a
+  satellite the cluster does not have (e.g. `satellite4` on a cluster with
+  satellite1-3) is refused up front with the available names and nothing is
+  created, instead of EVE-NG silently falling back to `any`. An offline
+  satellite adds a `warning`. If the list cannot be fetched the static
+  name -> id mapping is used. `tools.env.comm.example` disables it.
+
+## [0.9.5] - 2026-11-13
+
+### Added
+- **Lab satellite (EVE-NG PRO clusters).** `create_lab` and `edit_lab` take a
+  new optional `satellite` argument: `"any"`, `"master"`, `"satellite1"`,
+  `"satellite2"`, ... or the numeric id. EVE-NG PRO's lab object carries a
+  `sat` field (`get_lab` returns e.g. `"sat": "1"`); its satellite list maps
+  any = `-1`, master = `0`, satellite1 = `1`, satellite2 = `2`, ... The name is
+  translated to that id and sent as `sat`. An unknown name is refused before
+  anything is sent. Omitting it leaves EVE-NG's default (`any`).
+- After a create/edit that sets a satellite, the lab is re-read and the result
+  carries a `warning` if EVE-NG did not store the requested value, so a
+  wrongly named request field cannot fail silently.
+
+### Notes
+- The `sat` request key for lab create/edit is inferred from the field
+  `get_lab` returns (and the existing node `sat` field); confirm it live on a
+  cluster. Node placement within a lab is unchanged (`edit_lab_node` `sat`).
+
+## [0.9.4] - 2026-11-13
+
+### Fixed
+- **Cisco c8000v (and other qemu) nodes added by `add_lab_node` never booted.**
+  Root cause (EVE-NG PRO 7.2.0-18, 26.01.01 / 17.18.02 images): the tool
+  defaulted the startup configuration to `"Unconfigured"`, which is a valid
+  value for iol/dynamips nodes but not for qemu nodes. A c8000v created that
+  way started, then fell back to status 0 within seconds with a dead console
+  (telnet `Errno 111`). Every GUI-created qemu node carries the numeric
+  `config` `"0"` (the GUI's "Default"), and the identical node created with
+  `"0"` boots normally; image, RAM, CPU, NIC count, `cpulimit` and QEMU
+  options were all ruled out. `add_lab_node` now defaults `config` by node
+  type: `"0"` for qemu, `"Unconfigured"` for iol/dynamips. An explicit
+  `config` is still sent exactly as given.
+- `config` on `add_lab_node` / `edit_lab_node` now also accepts an integer
+  (e.g. `0`) and sends it as a string. Previously an agent passing `0`, the
+  form EVE-NG itself uses, was rejected by argument validation.
+
+### Changed
+- `config` docs on `add_lab_node` / `edit_lab_node` explain the per-type
+  values and warn that `"Unconfigured"`/`"Saved"` on a qemu node can prevent
+  it from booting.
+
+### Notes
+- Not changed: `config="0"` gets no bootstrap medium. c8000v nodes intended
+  as SD-WAN cEdges still need a cloud-init/`config.iso` bootstrap
+  (`uuid`, `otp`, `vbond`, `org`) to join vManage.
+
 ## [0.9.3] - 2026-10-09
 
 ### Changed

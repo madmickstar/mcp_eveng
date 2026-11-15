@@ -64,11 +64,9 @@ async def test_not_found_raises_not_found_error(client: EvengClient, base_url: s
 
 
 async def test_generic_api_error(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
-    # The client's own relogin-on-400 behavior (see client.py's _request,
-    # and docs/tools-reference.md's "Sessions and relogin" note) means
-    # a genuine validation failure still triggers one login attempt +
-    # retry before the error is finally raised, not a single request --
-    # this test mocks that full sequence rather than assuming one call.
+    # An ambiguous bare 400 first checks whether the session is still alive
+    # (GET /auth). It is, so this is a genuine rejection: raised straight away,
+    # with NO relogin (see test_genuine_400_does_not_relogin_when_session_alive).
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/labs",
@@ -76,15 +74,9 @@ async def test_generic_api_error(client: EvengClient, base_url: str, httpx_mock:
         json={"code": 400, "status": "fail", "message": "Bad request"},
     )
     httpx_mock.add_response(
-        method="POST",
-        url=f"{base_url}/auth/login",
-        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
-    )
-    httpx_mock.add_response(
-        method="POST",
-        url=f"{base_url}/labs",
-        status_code=400,
-        json={"code": 400, "status": "fail", "message": "Bad request"},
+        method="GET",
+        url=f"{base_url}/auth",
+        json={"code": 200, "status": "success", "message": "User checked (90019)."},
     )
 
     with pytest.raises(EvengAPIError):
@@ -358,10 +350,17 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
     # must trigger exactly one relogin-and-retry.
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
         status_code=400,
         json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
     )
+    # whoami confirms the session really is gone (EVE-NG returns 401 for /auth only)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/auth",
+        status_code=401,
+        json={"code": 401, "status": "unauthorized", "message": "User is not authenticated (90001)."},
+    )
     httpx_mock.add_response(
         method="POST",
         url=f"{base_url}/auth/login",
@@ -369,22 +368,22 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
-        json={"code": 200, "status": "success", "message": "Node stopped (80051)."},
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
+        json={"code": 200, "status": "success", "message": "Node wiped (80052)."},
     )
 
-    result = await client.stop_node("/User1/Lab 1.unl", 3)
+    result = await client.wipe_node("/User1/Lab 1.unl", 3)
 
-    assert result["message"] == "Node stopped (80051)."
+    assert result["message"] == "Node wiped (80052)."
 
 
-async def test_genuine_validation_400_reproduces_same_error_after_retry(
+async def test_genuine_400_does_not_relogin_when_session_alive(
     client: EvengClient, base_url: str, httpx_mock: HTTPXMock
 ) -> None:
-    # A real, non-auth-related 400 (bad parameters) still gets one
-    # wasted relogin-retry under the broadened check -- accepted
-    # trade-off -- but must surface the SAME final error, not something
-    # different or a silent success.
+    # A real, non-auth 400 (bad parameters, or EVE-NG's generic "Request not
+    # valid (60027)" on a node action) while GET /auth says the session is
+    # fine: surface the SAME error immediately and do NOT log in again. A
+    # relogin cannot help, and it would log the same account out of the GUI.
     httpx_mock.add_response(
         method="GET",
         url=f"{base_url}/list/templates/bogus-template",
@@ -392,21 +391,44 @@ async def test_genuine_validation_400_reproduces_same_error_after_retry(
         json={"code": 60033, "status": "fail", "message": "Requested template is not valid (60033)."},
     )
     httpx_mock.add_response(
-        method="POST",
-        url=f"{base_url}/auth/login",
-        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
-    )
-    httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/list/templates/bogus-template",
-        status_code=400,
-        json={"code": 60033, "status": "fail", "message": "Requested template is not valid (60033)."},
+        url=f"{base_url}/auth",
+        json={"code": 200, "status": "success", "message": "User checked (90019)."},
     )
 
     with pytest.raises(EvengAPIError) as exc_info:
         await client.get_node_template("bogus-template")
 
     assert "not valid" in str(exc_info.value).lower()
+    assert not [r for r in httpx_mock.get_requests() if r.url.path.endswith("/auth/login")]
+
+
+async def test_400_when_session_probe_fails_still_relogins(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # If we cannot positively confirm the session is alive (here the probe
+    # errors), fall back to the old behaviour: one relogin and retry.
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
+        status_code=400,
+        json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
+    )
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", status_code=500, text="boom")
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{base_url}/auth/login",
+        json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
+        json={"code": 200, "status": "success", "message": "Node wiped (80052)."},
+    )
+
+    result = await client.wipe_node("/User1/Lab 1.unl", 3)
+
+    assert result["message"] == "Node wiped (80052)."
 
 
 async def test_ensure_authenticated_only_logs_in_once(
@@ -904,3 +926,187 @@ async def test_list_all_folders_respects_max_folders(client: EvengClient, base_u
 
     assert len(httpx_mock.get_requests()) == 2
     assert {f["path"] for f in folders} == {"/A", "/B"}
+
+
+# -- concurrent relogin (EVE-NG allows one active session per user) ---------------
+
+
+class _SingleSessionEve:
+    """Fake EVE-NG that, like the real one, kills the old session on every new login."""
+
+    def __init__(self, *, login_delay: float = 0.05) -> None:
+        import itertools
+
+        self.login_delay = login_delay
+        self.current = "server-side-session"  # the client's cookie jar starts empty/stale
+        self.logins = 0
+        self._ids = itertools.count(1)
+
+    async def __call__(self, request):  # type: ignore[no-untyped-def]
+        import asyncio
+
+        import httpx
+
+        if request.url.path.endswith("/auth/login"):
+            await asyncio.sleep(self.login_delay)  # a real login takes a while
+            self.logins += 1
+            self.current = f"session-{next(self._ids)}"
+            return httpx.Response(
+                200,
+                json={"code": 200, "status": "success", "message": "User logged in (90013)."},
+                headers={"Set-Cookie": f"unetlab_session={self.current}; Path=/"},
+            )
+        if f"unetlab_session={self.current}" not in request.headers.get("cookie", ""):
+            return httpx.Response(
+                412,
+                json={
+                    "code": 412,
+                    "status": "unauthorized",
+                    "message": "User is not authenticated or session timed out (90001).",
+                },
+            )
+        await asyncio.sleep(0.01)
+        return httpx.Response(200, json={"code": 200, "status": "success", "data": {"path": request.url.path}})
+
+
+async def test_concurrent_calls_on_expired_session_share_one_relogin(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    """Regression: two calls hitting an expired session both re-logged in; the second login
+    killed the first's fresh session, so its retry failed with 90001."""
+    import asyncio
+
+    import httpx
+
+    eve = _SingleSessionEve()
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+    c._authenticated = True  # believes it is logged in; the server's session is gone
+
+    results = await asyncio.gather(*(c._get(f"/labs/x/nodes/{i}") for i in range(5)))
+
+    assert len(results) == 5
+    assert all(r["status"] == "success" for r in results)
+    assert eve.logins == 1
+    await http.aclose()
+
+
+async def test_concurrent_first_calls_share_one_initial_login(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    import asyncio
+
+    import httpx
+
+    eve = _SingleSessionEve()
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+
+    await asyncio.gather(*(c.ensure_authenticated() for _ in range(4)))
+    result = await c._get("/status")
+
+    assert eve.logins == 1
+    assert result["status"] == "success"
+    await http.aclose()
+
+
+async def test_session_killed_by_another_login_still_recovers_with_one_relogin(eveng_settings) -> None:  # type: ignore[no-untyped-def]
+    """Someone else (GUI, another tool) logging in as the same user kills our session: one relogin fixes it."""
+    import httpx
+
+    eve = _SingleSessionEve(login_delay=0)
+    http = httpx.AsyncClient(base_url=eveng_settings.base_url, transport=httpx.MockTransport(eve))
+    c = EvengClient(settings=eveng_settings, client=http)
+    await c.ensure_authenticated()
+    assert (await c._get("/status"))["status"] == "success"
+
+    eve.current = "someone-elses-session"  # the other login
+    assert (await c._get("/status"))["status"] == "success"
+
+    assert eve.logins == 2  # ours at start + one relogin; not one per request
+    await http.aclose()
+
+
+# -- single-node stop: PRO needs `/stop/stopmode=N`, Community takes plain `/stop` ----
+
+_LAB = "/User1/Lab 1.unl"
+_STOP = "labs/User1/Lab%201.unl/nodes/3/stop"
+_PRO = {"code": 200, "status": "success", "data": {"version": "7.2.0-18-PRO"}}
+_COMM = {"code": 200, "status": "success", "data": {"version": "6.2.0-4"}}
+_OK = {"code": 200, "status": "success", "message": "Node stopped (80051)."}
+_REFUSED = {"code": 400, "status": "fail", "message": "Request not valid (60027)."}
+_ALIVE = {"code": 200, "status": "success", "message": "User checked (90019)."}
+
+
+def _stop_urls(httpx_mock: HTTPXMock) -> list[str]:
+    return [r.url.raw_path.decode().split("/api/")[-1] for r in httpx_mock.get_requests() if "/nodes/" in r.url.path]
+
+
+async def test_stop_node_on_pro_uses_stopmode_form(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_PRO)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+
+    assert (await client.stop_node(_LAB, 3))["message"] == "Node stopped (80051)."
+    assert _stop_urls(httpx_mock) == [f"{_STOP}/stopmode=3"]
+
+
+async def test_stop_node_on_community_uses_plain_stop(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_COMM)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", json=_OK)
+
+    await client.stop_node(_LAB, 3)
+
+    assert _stop_urls(httpx_mock) == [_STOP]
+
+
+async def test_stop_node_falls_back_to_other_form_and_remembers_it(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # Edition says Community, but this server wants stopmode (e.g. a newer build): one fallback, then remembered.
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_COMM)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)  # genuine 400: no relogin
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+
+    await client.stop_node(_LAB, 3)
+    await client.stop_node(_LAB, 3)  # goes straight to the form that worked, no status call, no failure
+
+    assert _stop_urls(httpx_mock) == [_STOP, f"{_STOP}/stopmode=3", f"{_STOP}/stopmode=3"]
+    assert sum(1 for r in httpx_mock.get_requests() if r.url.path.endswith("/status")) == 1
+
+
+async def test_stop_node_both_forms_refused_raises_the_preferred_forms_error(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_PRO)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)
+
+    with pytest.raises(EvengAPIError, match="60027"):
+        await client.stop_node(_LAB, 3)
+
+
+async def test_stop_node_explicit_stopmode_is_sent_as_given(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=1", json=_OK)  # no /status lookup
+
+    await client.stop_node(_LAB, 3, stopmode=1)
+
+    assert _stop_urls(httpx_mock) == [f"{_STOP}/stopmode=1"]
+
+
+async def test_stop_node_rejects_invalid_stopmode(client: EvengClient) -> None:
+    with pytest.raises(ValueError, match="stopmode"):
+        await client.stop_node(_LAB, 3, stopmode=7)
+
+
+async def test_stop_node_without_node_id_still_uses_bulk_endpoint(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/labs/User1/Lab%201.unl/nodes/stop", json=_OK)
+
+    await client.stop_node(_LAB)
+
+    assert _stop_urls(httpx_mock) == ["labs/User1/Lab%201.unl/nodes/stop"]

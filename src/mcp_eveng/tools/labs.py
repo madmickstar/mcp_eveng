@@ -11,8 +11,102 @@ from ..client import EvengClient
 from ..confirmation import format_numbered, resolve_selection, run_delete_flow
 from ..dependencies import lab_lock
 from ..edition import is_pro_edition
+from .system import satellite_entries
 
 GetClient = Callable[[], Awaitable[EvengClient]]
+
+
+# -- lab satellite (PRO clusters) ----------------------------------------------
+#
+# A lab carries a `sat` field naming the cluster member its nodes run on.
+# EVE-NG PRO's own satellite list (observed live, 7.2.0-18) maps:
+#   any = "-1", master = "0", satellite1 = "1", satellite2 = "2", ...
+# `get_lab` returns it as e.g. `"sat": "1"`.
+
+_SATELLITE_ANY = "-1"
+_SATELLITE_MASTER = "0"
+
+
+def _resolve_satellite(satellite: str | int | None) -> str | None:
+    """Turn a satellite name or id into EVE-NG's id string, or None if unset.
+
+    Accepts "any", "master", "satellite1" (also "satellite 1" / "sat1"),
+    or a raw id (1, "1", -1). Raises ValueError for anything else.
+    """
+    if satellite is None:
+        return None
+    text = str(satellite).strip().lower()
+    if not text:
+        return None
+    if text == "any":
+        return _SATELLITE_ANY
+    if text == "master":
+        return _SATELLITE_MASTER
+    for prefix in ("satellite", "sat"):
+        if text.startswith(prefix):
+            number = text[len(prefix) :].strip(" _-")
+            if number.isdigit():
+                return str(int(number))
+    if text.lstrip("-").isdigit() and int(text) >= -1:
+        return str(int(text))
+    raise ValueError(
+        f"Unknown satellite {satellite!r}: use 'any', 'master', 'satellite1', 'satellite2', ... "
+        "(or the numeric id: -1 = any, 0 = master, 1 = satellite1, ...)."
+    )
+
+
+async def _resolve_satellite_live(client: EvengClient, satellite: str | int | None) -> tuple[str | None, str | None]:
+    """Resolve `satellite` to an id, checking it against the cluster's live list.
+
+    Returns `(id, warning)`; `(None, None)` when unset. Raises ValueError for an
+    unknown name or one the cluster does not have, so nothing is sent for it.
+    If the list cannot be fetched, falls back to the static name -> id mapping
+    (the post-write check in `_verify_satellite` still catches a rejected value).
+    """
+    text = "" if satellite is None else str(satellite).strip()
+    if not text:
+        return None, None
+    try:
+        entries = satellite_entries(await client.list_satellites())
+    except Exception:  # noqa: BLE001 -- the live list is an optional safeguard
+        entries = None
+    if not entries:
+        return _resolve_satellite(text), None
+    by_name = {e["name"].lower(): e for e in entries}
+    entry = by_name.get(text.lower())
+    if entry is None:
+        sat = _resolve_satellite(text)
+        entry = next((e for e in entries if e["id"] == sat), None)
+        if entry is None:
+            available = ", ".join(f"{e['name']} (id {e['id']})" for e in entries)
+            raise ValueError(f"No satellite {satellite!r} on this cluster. Available: {available}.")
+    warning = f"Satellite {entry['name']!r} is reported offline." if not entry["online"] else None
+    return entry["id"], warning
+
+
+def _join_warnings(result: dict[str, Any], *warnings: str | None) -> dict[str, Any]:
+    parts = [w for w in (result.get("warning"), *warnings) if w]
+    if parts:
+        result["warning"] = " ".join(parts)
+    return result
+
+
+async def _verify_satellite(
+    client: EvengClient, lab_path: str, expected: str, result: dict[str, Any]
+) -> dict[str, Any]:
+    """Re-read the lab and warn (never raise) if EVE-NG did not store the requested satellite."""
+    try:
+        data = (await client.get_lab(lab_path)).get("data") or {}
+        actual = data.get("sat") if isinstance(data, dict) else None
+    except Exception as exc:  # noqa: BLE001 -- verification is best-effort
+        result["warning"] = f"Could not re-read the lab to confirm its satellite: {exc}"
+        return result
+    if str(actual) != expected:
+        result["warning"] = (
+            f"EVE-NG did not apply the satellite: asked for sat={expected!r} but the lab reports "
+            f"sat={actual!r}. Check the lab's Satellite setting in the GUI."
+        )
+    return result
 
 
 async def get_lab(client: EvengClient, lab_path: str) -> dict[str, Any]:
@@ -28,9 +122,22 @@ async def create_lab(
     author: str = "",
     description: str = "",
     body: str = "",
+    satellite: str | int | None = None,
 ) -> dict[str, Any]:
-    """Create a new (empty) lab."""
-    return await client.create_lab(path, name, version=version, author=author, description=description, body=body)
+    """Create a new (empty) lab, optionally on a specific satellite (PRO clusters)."""
+    try:
+        sat, sat_warning = await _resolve_satellite_live(client, satellite)
+    except ValueError as exc:
+        return {"status": "error", "message": f"{exc} Nothing was created."}
+    if sat is None:
+        return await client.create_lab(path, name, version=version, author=author, description=description, body=body)
+    result = await client.create_lab(
+        path, name, version=version, author=author, description=description, body=body, sat=sat
+    )
+    if result.get("status") != "success":
+        return result
+    lab_path = f"{path.rstrip('/')}/{name}.unl"
+    return _join_warnings(await _verify_satellite(client, lab_path, sat, result), sat_warning)
 
 
 async def edit_lab(
@@ -41,8 +148,13 @@ async def edit_lab(
     author: str | None = None,
     description: str | None = None,
     body: str | None = None,
+    satellite: str | int | None = None,
 ) -> dict[str, Any]:
     """Edit an existing lab's metadata. Only supplied fields are changed."""
+    try:
+        sat, sat_warning = await _resolve_satellite_live(client, satellite)
+    except ValueError as exc:
+        return {"status": "error", "message": f"{exc} Nothing was changed."}
     async with lab_lock(lab_path):
         fields = {
             k: v
@@ -52,10 +164,14 @@ async def edit_lab(
                 "author": author,
                 "description": description,
                 "body": body,
+                "sat": sat,
             }.items()
             if v is not None
         }
-        return await client.edit_lab(lab_path, **fields)
+        result = await client.edit_lab(lab_path, **fields)
+        if sat is None or name is not None or result.get("status") != "success":
+            return result
+        return _join_warnings(await _verify_satellite(client, lab_path, sat, result), sat_warning)
 
 
 # -- share_lab: add users to a lab's `shared` list, via edit_lab ---------------
@@ -291,7 +407,7 @@ _OPEN_LAB_MENU = (
     "What would you like to do to it?\n\n"
     "* Add nodes \u2014 `add_lab_node` (pick a template via `list_node_templates`)\n"
     "* Add networks \u2014 `add_lab_network` (bridge, NAT, etc.)\n"
-    "* Edit metadata \u2014 `edit_lab` (name, description, author, version, notes)"
+    "* Edit metadata \u2014 `edit_lab` (name, description, author, version, notes, satellite)"
 )
 
 
@@ -480,8 +596,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             author: str = "",
             description: str = "",
             body: str = "",
+            satellite: str | int | None = None,
         ) -> dict[str, Any]:
-            """Create a new (empty) lab.
+            """Create a new (empty) lab, optionally on a specific satellite (PRO clusters).
 
             Args:
                 path: Destination folder, e.g. "/User1".
@@ -490,9 +607,24 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 author: Lab author.
                 description: One-line description.
                 body: Free-form lab notes/usage guide.
+                satellite: EVE-NG PRO cluster member the lab runs on: "any",
+                    "master", "satellite1", "satellite2", ... (or the numeric
+                    id: -1 any, 0 master, 1 satellite1, ...). Checked against
+                    the cluster's live list (see `list_satellites`): a
+                    satellite the cluster doesn't have is refused and nothing
+                    is created. Omit to let EVE-NG use its default ("any").
+                    The result carries a `warning` if EVE-NG did not store
+                    the requested value or the satellite is offline.
             """
             return await create_lab(
-                await get_client(), path, name, version=version, author=author, description=description, body=body
+                await get_client(),
+                path,
+                name,
+                version=version,
+                author=author,
+                description=description,
+                body=body,
+                satellite=satellite,
             )
 
     if enabled("edit_lab"):
@@ -505,6 +637,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             author: str | None = None,
             description: str | None = None,
             body: str | None = None,
+            satellite: str | int | None = None,
         ) -> dict[str, Any]:
             """Edit an existing lab's metadata. Only supplied fields are changed.
 
@@ -515,6 +648,11 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 author: New author, if changing.
                 description: New description, if changing.
                 body: New body/notes, if changing.
+                satellite: New satellite (PRO clusters), if changing: "any",
+                    "master", "satellite1", ... or the numeric id. Checked
+                    against the cluster's live list (see `list_satellites`).
+                    The result carries a `warning` if EVE-NG did not store it
+                    or the satellite is offline.
             """
             return await edit_lab(
                 await get_client(),
@@ -524,6 +662,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 author=author,
                 description=description,
                 body=body,
+                satellite=satellite,
             )
 
     if enabled("share_lab"):

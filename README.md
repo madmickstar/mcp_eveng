@@ -294,6 +294,7 @@ and why these six specifically differ.
 | | `get_node_template` | Gets details for a single node template, including its images. | ✅ | ✅ |
 | | `list_network_types` | Lists valid network types (bridge, cloud/pnetX, etc.). | ✅ | ✅ |
 | | `list_user_roles` | Lists available user roles. Disabled by default. | ✅ | ✅ |
+| | `list_satellites` | Lists the cluster's satellites (id, name, online); `create_lab`/`edit_lab` check `satellite` against it. | ❌ | ✅ |
 | Server introspection | `list_tools` | Lists the tools published by the MCP server. | ✅ | ✅ |
 | Folders | `list_folder` | Lists the contents of a folder. | ✅ | ✅ |
 | | `add_folder` | Creates a new folder. | ✅ | ✅ |
@@ -467,11 +468,19 @@ for what that means in practice and how `EvengClient` handles it.
 
 ## Known issues
 
-`stop_node` (and anything that requires stopping a node first —
-`edit_lab_node`, `change_node_delay`, `edit_lab_nodes_by_template`,
-`connect_interface` on Community edition) can fail persistently on
-certain nodes with `"Request not valid (60027)."`, with no way found so
-far to make that specific node stoppable again through the API.
+**EVE-NG PRO: single-node stop needs `stopmode` (fixed in 0.9.10).** The
+documented `GET .../nodes/{id}/stop` is refused on PRO with
+`"Request not valid (60027)."` even on a healthy session, while `start` works.
+The web UI sends `.../nodes/{id}/stop/stopmode={N}`, and so does this server
+now (`stopmode=3`, the UI's default "Stop") when it detects PRO; Community
+keeps the plain form, and if the first form is refused the other is tried
+once and remembered. `stop_node` also takes an optional `stopmode`
+(`graceful`=0, `poweroff`=1, `hibernate`=2, `auto`=3). This covers everything
+that stops a node first (`edit_lab_node`, `change_node_delay`,
+`edit_lab_nodes_by_template`, `connect_interface` on Community). A node that
+is genuinely stuck can still be refused; a failed stop does not trigger a
+relogin (since 0.9.9), so it fails fast and does not log the same account out
+of the web GUI.
 
 ## Development
 

@@ -28,6 +28,7 @@ transparently (re)authenticates on first use.
 
 from __future__ import annotations
 
+import asyncio
 from types import TracebackType
 from typing import Any
 from urllib.parse import quote
@@ -35,6 +36,7 @@ from urllib.parse import quote
 import httpx
 
 from .config import EvengSettings, get_eveng_settings
+from .edition import is_pro_edition
 from .exceptions import EvengAPIError, EvengAuthError, EvengError, EvengNotFoundError
 
 JsonDict = dict[str, Any]
@@ -80,6 +82,17 @@ class EvengClient:
             verify=self._settings.verify_ssl,
         )
         self._authenticated = False
+        # EVE-NG allows ONE active session per user: a second login kills the
+        # first. So concurrent calls that all find the session expired must
+        # share ONE relogin. `_session_gen` counts completed logins; a request
+        # remembers the generation it was sent under, and after a 412/400/401
+        # only logs in if nobody else already has since (see `_relogin`).
+        self._login_lock = asyncio.Lock()
+        self._session_gen = 0
+        # Which single-node stop URL form this server accepts, learned lazily:
+        # True = `/stop/stopmode=N` (PRO), False = plain `/stop` (Community),
+        # None = not yet known. See `stop_node`.
+        self._stop_uses_mode: bool | None = None
 
     # -- lifecycle -----------------------------------------------------
 
@@ -109,6 +122,7 @@ class EvengClient:
         params: JsonDict | None = None,
         auto_login: bool = True,
     ) -> JsonDict | None:
+        sent_gen = self._session_gen
         response = await self._http.request(method, path, json=json, params=params)
         payload: JsonDict | None
         try:
@@ -158,9 +172,21 @@ class EvengClient:
         # is confirmed to happen and previously had no reliable signal
         # to detect from the response body alone.
         needs_relogin = auto_login and response.status_code in (400, 401, 412)
+        if (
+            needs_relogin
+            and response.status_code == 400
+            and not (isinstance(payload, dict) and payload.get("status") == "unauthorized")
+            and await self._session_is_alive()
+        ):
+            # An ambiguous bare 400 ("Request not valid (60027)" etc.) while
+            # the session is demonstrably still valid is a genuine rejection
+            # of THIS request, not an auth problem. Do not relogin: it cannot
+            # help (the retry fails identically), costs a couple of seconds,
+            # and -- since EVE-NG allows one session per user -- logs the same
+            # account out of the web GUI or any other client.
+            needs_relogin = False
         if needs_relogin:
-            self._authenticated = False
-            await self.login()
+            await self._relogin(sent_gen)
             return await self._request(method, path, json=json, params=params, auto_login=False)
 
         if payload is None:
@@ -221,7 +247,37 @@ class EvengClient:
         if result is None:
             raise EvengAuthError("Login failed: empty response from EVENG")
         self._authenticated = True
+        self._session_gen += 1
         return result
+
+    async def _session_is_alive(self) -> bool:
+        """True only if EVE-NG definitively says this session is still logged in.
+
+        Uses `GET /auth` (whoami), which EVE-NG special-cases to return 401
+        (not 412) when the session is gone. Anything other than a clean
+        success -- 401, an auth error, a network problem, an odd body -- is
+        reported as "not alive", which keeps the old behaviour (relogin).
+        """
+        try:
+            result = await self._request("GET", "/auth", auto_login=False)
+        except Exception:  # noqa: BLE001 -- unknown means "assume dead", the safe old behaviour
+            return False
+        return isinstance(result, dict) and result.get("status") == "success"
+
+    async def _relogin(self, sent_gen: int) -> None:
+        """Re-authenticate after a request failed as unauthenticated, once for all concurrent callers.
+
+        `sent_gen` is the session generation the failed request was sent under.
+        Callers are serialised; if another caller has already logged in since
+        (the generation moved on), this one just reuses that fresh session
+        instead of logging in again -- a second login would invalidate the
+        first caller's brand-new session and make its retry fail with 90001.
+        """
+        async with self._login_lock:
+            if self._session_gen != sent_gen:
+                return
+            self._authenticated = False
+            await self.login()
 
     async def logout(self) -> JsonDict:
         # Deliberately calls `_request` directly, not `_get` -- `_get` now
@@ -236,8 +292,12 @@ class EvengClient:
         return await self._get("/auth")
 
     async def ensure_authenticated(self) -> None:
-        if not self._authenticated:
-            await self.login()
+        if self._authenticated:
+            return
+        sent_gen = self._session_gen
+        async with self._login_lock:
+            if not self._authenticated and self._session_gen == sent_gen:
+                await self.login()
 
     # -- system ------------------------------------------------------------
 
@@ -255,6 +315,14 @@ class EvengClient:
 
     async def list_user_roles(self) -> JsonDict:
         return await self._get("/list/roles")
+
+    async def list_satellites(self) -> JsonDict:
+        """EVE-NG PRO cluster members (the list behind a lab's Satellite dropdown).
+
+        `GET /api/clusterfull`, confirmed from a live PRO 7.2.0-18 cluster's own
+        GUI traffic. `data` maps an index to `{id, name, pubkey, online}`.
+        """
+        return await self._get("/clusterfull")
 
     # -- folders -----------------------------------------------------------
 
@@ -428,8 +496,9 @@ class EvengClient:
         author: str = "",
         description: str = "",
         body: str = "",
+        sat: str | None = None,
     ) -> JsonDict:
-        payload = {
+        payload: JsonDict = {
             "path": path,
             "name": name,
             "version": version,
@@ -437,6 +506,8 @@ class EvengClient:
             "description": description,
             "body": body,
         }
+        if sat is not None:
+            payload["sat"] = sat
         return await self._post("/labs", json=payload)
 
     async def edit_lab(self, lab_path: str, **fields: Any) -> JsonDict:
@@ -651,8 +722,57 @@ class EvengClient:
         """Start a single node, or every node in the lab if `node_id` is None."""
         return await self._node_action(lab_path, "start", node_id)
 
-    async def stop_node(self, lab_path: str, node_id: int | None = None) -> JsonDict:
-        return await self._node_action(lab_path, "stop", node_id)
+    async def _stop_node_form(self, lab_path: str, node_id: int, *, with_mode: bool, stopmode: int) -> JsonDict:
+        suffix = f"/stopmode={stopmode}" if with_mode else ""
+        return await self._get(f"/labs{_quote_path(lab_path)}/nodes/{node_id}/stop{suffix}")
+
+    async def _guess_stop_uses_mode(self) -> bool:
+        """First guess at which stop URL form to try: `stopmode` on PRO, plain on Community."""
+        try:
+            data = (await self.get_status()).get("data")
+            return isinstance(data, dict) and is_pro_edition(data)
+        except Exception:  # noqa: BLE001 -- only a first guess; the fallback in stop_node corrects it
+            return False
+
+    async def stop_node(self, lab_path: str, node_id: int | None = None, stopmode: int | None = None) -> JsonDict:
+        """Stop one node, or every node in the lab if `node_id` is None.
+
+        EVE-NG PRO's single-node stop only accepts the form the web GUI itself
+        sends, `GET .../nodes/{id}/stop/stopmode={N}`; the documented plain
+        `.../stop` is refused with HTTP 400 "Request not valid (60027)" while
+        `start` works on the same session (confirmed live on PRO 7.2.0-18, and
+        reported on other PRO versions). Community accepts plain `/stop`.
+        `stopmode`: 0 graceful shutdown (ACPI/OS), 1 hard power off,
+        2 hibernate (PRO), 3 automatic -- the GUI's default "Stop".
+
+        With `stopmode=None` (default) the right form is chosen automatically:
+        `stopmode=3` on PRO, plain on Community. If that form is refused with
+        the generic 400 the other one is tried once, and whichever works is
+        remembered for the rest of this client's life. An explicit `stopmode`
+        is always sent as given, with no fallback. `node_id=None` (stop all)
+        uses the bulk endpoint unchanged.
+        """
+        if node_id is None:
+            return await self._node_action(lab_path, "stop", None)
+        if stopmode is not None:
+            if stopmode not in (0, 1, 2, 3):
+                raise ValueError("stopmode must be 0 (graceful), 1 (power off), 2 (hibernate) or 3 (automatic)")
+            return await self._stop_node_form(lab_path, node_id, with_mode=True, stopmode=stopmode)
+
+        first = self._stop_uses_mode if self._stop_uses_mode is not None else await self._guess_stop_uses_mode()
+        try:
+            result = await self._stop_node_form(lab_path, node_id, with_mode=first, stopmode=3)
+        except EvengAPIError as exc:
+            if not (exc.code in (400, 60027) or "60027" in str(exc)):
+                raise
+            try:
+                result = await self._stop_node_form(lab_path, node_id, with_mode=not first, stopmode=3)
+            except EvengError:
+                raise exc from None  # report the preferred form's error; both forms were refused
+            self._stop_uses_mode = not first
+            return result
+        self._stop_uses_mode = first
+        return result
 
     async def wipe_node(self, lab_path: str, node_id: int | None = None) -> JsonDict:
         return await self._node_action(lab_path, "wipe", node_id)

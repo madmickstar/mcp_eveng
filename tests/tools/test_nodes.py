@@ -272,7 +272,7 @@ async def test_add_lab_node_fills_defaults_from_template() -> None:
         template="vjunosevo",
         name="vEVO",
         image="vjunosevo-24.2R1",
-        config="Unconfigured",
+        config="0",
         icon="Juniper-2D-Router-S.svg",
         left="100",
         top="100",
@@ -2934,3 +2934,137 @@ async def test_edit_lab_node_without_eth_fields_has_no_eth_note() -> None:
     result = await nodes.edit_lab_node(client, "/lab.unl", 4, ram=1024)
 
     assert "not applied" not in result["message"]
+
+
+def _c8000v_client(node_type: str = "qemu") -> AsyncMock:
+    client = AsyncMock()
+    client.list_node_templates.return_value = _templates_data(("c8000v", "Cisco Catalyst 8000V"))
+    client.get_node_template.return_value = {
+        "status": "success",
+        "data": {
+            "type": node_type,
+            "options": {
+                "image": {"value": "c8000v-26.01.01", "list": {"c8000v-26.01.01": "c8000v-26.01.01"}},
+            },
+        },
+    }
+    client.list_lab_nodes.return_value = {"status": "success", "data": {}}
+    client.add_lab_node.return_value = {"status": "success"}
+    return client
+
+
+async def test_add_lab_node_qemu_defaults_config_to_zero() -> None:
+    """Regression: qemu nodes created with "Unconfigured" never boot (c8000v)."""
+    client = _c8000v_client("qemu")
+
+    await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="c8000v")
+
+    assert client.add_lab_node.await_args.kwargs["config"] == "0"
+
+
+@pytest.mark.parametrize("node_type", ["iol", "dynamips"])
+async def test_add_lab_node_non_qemu_defaults_config_to_unconfigured(node_type: str) -> None:
+    client = _c8000v_client(node_type)
+
+    await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="c8000v")
+
+    assert client.add_lab_node.await_args.kwargs["config"] == "Unconfigured"
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [("Saved", "Saved"), ("Unconfigured", "Unconfigured"), (0, "0"), (" 0 ", "0"), ("", "0")],
+)
+async def test_add_lab_node_explicit_config_is_sent_as_given(given: str | int, expected: str) -> None:
+    client = _c8000v_client("qemu")
+
+    await nodes.add_lab_node(client, "/User1/Lab 1.unl", template="c8000v", config=given)
+
+    assert client.add_lab_node.await_args.kwargs["config"] == expected
+
+
+def test_normalize_config() -> None:
+    assert nodes._normalize_config(None) is None
+    assert nodes._normalize_config("  ") is None
+    assert nodes._normalize_config(0) == "0"
+    assert nodes._normalize_config("Saved") == "Saved"
+
+
+async def test_edit_lab_node_accepts_integer_config_and_sends_string() -> None:
+    """Agents send the qemu 'Default' config as the int 0; EVE-NG wants a string."""
+    client = AsyncMock()
+    client.list_lab_nodes.return_value = {"status": "success", "data": {"name": "R1", "status": 0}}
+    client.edit_lab_node.return_value = {"status": "success"}
+
+    await nodes.edit_lab_node(client, "/User1/Lab 1.unl", 1, config=0)
+
+    assert client.edit_lab_node.await_args.kwargs["config"] == "0"
+
+
+# -- stop_node stopmode -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("auto", 3),
+        ("Graceful", 0),
+        ("shutdown", 0),
+        ("poweroff", 1),
+        ("power off", 1),
+        ("hibernate", 2),
+        (3, 3),
+        ("1", 1),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_resolve_stopmode(given: str | int | None, expected: int | None) -> None:
+    assert nodes._resolve_stopmode(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["fast", 4, "-1", "7"])
+def test_resolve_stopmode_rejects_unknown(bad: str | int) -> None:
+    with pytest.raises(ValueError, match="Unknown stop mode"):
+        nodes._resolve_stopmode(bad)
+
+
+async def test_stop_node_default_passes_no_stopmode() -> None:
+    client = AsyncMock()
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", 3)
+
+    client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 3)
+
+
+async def test_stop_node_passes_resolved_stopmode() -> None:
+    client = AsyncMock()
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", 3, stopmode="poweroff")
+
+    client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 3, stopmode=1)
+
+
+async def test_stop_node_invalid_stopmode_stops_nothing() -> None:
+    client = AsyncMock()
+
+    result = await nodes.stop_node(client, "/User1/Lab 1.unl", 3, stopmode="fast")
+
+    assert result["status"] == "error"
+    assert "Nothing was stopped" in result["message"]
+    client.stop_node.assert_not_awaited()
+
+
+async def test_stop_all_nodes_passes_stopmode_to_each_node() -> None:
+    client = AsyncMock()
+    client.list_lab_nodes.return_value = {
+        "status": "success",
+        "data": {"1": {"id": 1, "name": "R1"}, "2": {"id": 2, "name": "R2"}},
+    }
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", stopmode=0)
+
+    assert [c.kwargs for c in client.stop_node.await_args_list] == [{"stopmode": 0}, {"stopmode": 0}]

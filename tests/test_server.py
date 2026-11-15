@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "get_node_template",
     "list_network_types",
     "list_user_roles",
+    "list_satellites",
     "list_folder",
     "add_folder",
     "move_folder",
@@ -628,3 +629,37 @@ def test_run_networked_exits_cleanly_before_uvicorn_when_tls_cert_unreadable(mon
         server_module._run_networked(mcp, settings, "streamable-http")
 
     assert "app" not in captured
+
+
+# -- benign Windows connection-reset filter -------------------------------------
+
+_LOST_MSG = "Exception in callback _ProactorBasePipeTransport._call_connection_lost()"
+
+
+def test_benign_connection_reset_matches_only_the_connection_lost_callback() -> None:
+    from mcp_eveng.server import _is_benign_connection_reset
+
+    reset = ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+    assert _is_benign_connection_reset({"message": _LOST_MSG, "exception": reset})
+    # same exception type from somewhere else is a real error
+    assert not _is_benign_connection_reset({"message": "Exception in callback something_else()", "exception": reset})
+    # the same callback failing with a different error is a real error
+    assert not _is_benign_connection_reset({"message": _LOST_MSG, "exception": RuntimeError("boom")})
+    assert not _is_benign_connection_reset({"message": _LOST_MSG})
+
+
+def test_connection_reset_filter_swallows_benign_and_defers_the_rest() -> None:
+    from unittest.mock import MagicMock
+
+    from mcp_eveng.server import _install_connection_reset_filter
+
+    loop = MagicMock()
+    _install_connection_reset_filter(loop)
+    handler = loop.set_exception_handler.call_args.args[0]
+
+    handler(loop, {"message": _LOST_MSG, "exception": ConnectionResetError(10054, "reset")})
+    loop.default_exception_handler.assert_not_called()
+
+    other = {"message": "Task exception was never retrieved", "exception": RuntimeError("real")}
+    handler(loop, other)
+    loop.default_exception_handler.assert_called_once_with(other)
