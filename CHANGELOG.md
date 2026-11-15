@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-11-15
+
+### Fixed
+- **Ctrl+C printed a traceback (`RuntimeError: Event loop is closed`) instead of
+  exiting cleanly.** On shutdown the shared EVE-NG HTTP client was closed in a
+  brand-new event loop, but its pooled keep-alive connections belong to the
+  server's own loop, which Ctrl+C had already torn down; closing them then
+  raised, and that error replaced the clean `SystemExit(0)`. (It only bites when
+  a connection is still pooled, i.e. after the server has talked to EVE-NG.)
+  Now the client is closed on the server's own loop, shielded from
+  cancellation, before that loop ends (`--http`/`--sse`); `close_client()`
+  tolerates the "Event loop is closed" case (any other error still
+  propagates); and the final process-exit close can never raise, so Ctrl+C
+  always ends with the "Goodbye!" message and exit code 0. Verified end to end
+  against a real running server (exit code 1 + traceback before; 0 after).
+
 ## [0.9.10] - 2026-11-15
 
 ### Fixed

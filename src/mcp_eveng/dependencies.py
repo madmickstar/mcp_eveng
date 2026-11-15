@@ -18,10 +18,13 @@ supply a fake/mocked client instead.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from .client import EvengClient
+
+logger = logging.getLogger(__name__)
 
 _client: EvengClient | None = None
 _lock = asyncio.Lock()
@@ -38,12 +41,26 @@ async def get_client() -> EvengClient:
 
 
 async def close_client() -> None:
-    """Close and drop the shared client, if one was created."""
+    """Close and drop the shared client, if one was created.
+
+    Safe to call from a different event loop than the one the client's
+    connections were opened on (which is what happens when the server's own
+    loop has already been torn down by Ctrl+C): closing a pooled connection
+    then raises `RuntimeError: Event loop is closed`. That is harmless at
+    shutdown -- the sockets are released when the process exits -- so it is
+    swallowed; any other error still propagates.
+    """
     global _client
     async with _lock:
-        if _client is not None:
-            await _client.aclose()
-            _client = None
+        client, _client = _client, None
+        if client is None:
+            return
+        try:
+            await client.aclose()
+        except RuntimeError as exc:
+            if "Event loop is closed" not in str(exc):
+                raise
+            logger.debug("Ignoring %s while closing the EVE-NG client at shutdown", exc)
 
 
 # -- per-lab locking -------------------------------------------------------
