@@ -195,6 +195,14 @@ def _check_tls_files_readable(cert_path: str | None, key_path: str | None) -> No
             raise SystemExit(1) from None
 
 
+def _close_shared_client_quietly() -> None:
+    """Best-effort close of the shared EVE-NG client at process exit; never raises."""
+    try:
+        anyio.run(close_client)
+    except Exception:  # noqa: BLE001 -- shutdown must stay quiet; the OS reclaims the sockets
+        logger.debug("Could not close the EVE-NG client at shutdown", exc_info=True)
+
+
 def _is_benign_connection_reset(context: dict[str, Any]) -> bool:
     """True for asyncio's "connection lost" callback failing on an already-reset socket.
 
@@ -256,7 +264,15 @@ def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Tran
 
     async def serve() -> None:
         _install_connection_reset_filter(asyncio.get_running_loop())
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            # Close the shared EVE-NG client on THIS loop, while it is still
+            # running, so its pooled connections are released cleanly. Doing
+            # it only afterwards, in a fresh loop (see `run`), fails with
+            # "Event loop is closed". Shielded so Ctrl+C cannot cancel it.
+            with anyio.CancelScope(shield=True):
+                await close_client()
 
     anyio.run(serve)
 
@@ -306,4 +322,9 @@ def run(transport: Transport = "stdio") -> None:
         # `lifespan=` parameter; see the comment on `ToolCallLoggingFastMCP(...)`
         # in `create_server()` above for why that would be actively harmful
         # (it's scoped per connection/session/request, not per process).
-        anyio.run(close_client)
+        #
+        # For --http/--sse the client was already closed on the server's own
+        # loop (see `_run_networked`), so this is a no-op there. For stdio it
+        # is the real close, in a fresh loop. It must never raise: an error
+        # here would replace the clean SystemExit(0) above with a traceback.
+        _close_shared_client_quietly()

@@ -663,3 +663,63 @@ def test_connection_reset_filter_swallows_benign_and_defers_the_rest() -> None:
     other = {"message": "Task exception was never retrieved", "exception": RuntimeError("real")}
     handler(loop, other)
     loop.default_exception_handler.assert_called_once_with(other)
+
+
+# -- clean Ctrl+C shutdown (no "Event loop is closed" traceback) -------------------
+
+
+def test_run_exits_cleanly_even_if_closing_the_client_raises(monkeypatch, capsys) -> None:
+    """Regression: after Ctrl+C the client was closed in a fresh loop and raised
+    `RuntimeError: Event loop is closed`, replacing the clean exit with a traceback."""
+    import mcp_eveng.server as server_module
+
+    class _FakeMCP:
+        def run(self, transport: str) -> None:  # noqa: ARG002
+            raise KeyboardInterrupt
+
+    async def exploding_close() -> None:
+        raise RuntimeError("Event loop is closed")
+
+    monkeypatch.setattr(server_module, "get_mcp_settings", lambda: MCPTransportSettings(_env_file=None))
+    monkeypatch.setattr(server_module, "create_server", lambda settings, transport: _FakeMCP())
+    monkeypatch.setattr(server_module, "close_client", exploding_close)
+
+    with pytest.raises(SystemExit) as exc_info:  # SystemExit(0), not RuntimeError
+        server_module.run("stdio")
+
+    assert exc_info.value.code == 0
+    assert "Goodbye" in capsys.readouterr().err
+
+
+def test_run_networked_closes_the_client_on_the_servers_own_loop(monkeypatch) -> None:
+    import asyncio
+
+    import mcp_eveng.server as server_module
+
+    seen: dict[str, object] = {}
+
+    class _Server:
+        def __init__(self, config) -> None:  # noqa: ARG002
+            pass
+
+        async def serve(self) -> None:
+            seen["serve_loop"] = asyncio.get_running_loop()
+            raise KeyboardInterrupt  # what Ctrl+C looks like from inside serve()
+
+    async def fake_close() -> None:
+        seen["close_loop"] = asyncio.get_running_loop()
+        seen["closed_while_running"] = True
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kw: object())
+    monkeypatch.setattr(uvicorn, "Server", _Server)
+    monkeypatch.setattr(server_module, "close_client", fake_close)
+    settings = MCPTransportSettings(host="127.0.0.1", port=9999, _env_file=None)  # type: ignore[call-arg]
+    mcp = create_server(settings, "streamable-http")
+
+    with pytest.raises(KeyboardInterrupt):
+        server_module._run_networked(mcp, settings, "streamable-http")
+
+    assert seen["closed_while_running"] is True
+    assert seen["close_loop"] is seen["serve_loop"]
