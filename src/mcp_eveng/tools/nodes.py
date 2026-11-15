@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any
@@ -1902,6 +1903,38 @@ async def _all_node_ids_and_names(client: EvengClient, lab_path: str) -> list[tu
     return pairs
 
 
+_STOPMODE_NAMES = {
+    "graceful": 0,
+    "shutdown": 0,
+    "poweroff": 1,
+    "power off": 1,
+    "power_off": 1,
+    "hard": 1,
+    "hibernate": 2,
+    "auto": 3,
+    "automatic": 3,
+    "default": 3,
+}
+
+
+def _resolve_stopmode(value: str | int | None) -> int | None:
+    """Turn a stop mode name or number into EVE-NG's `stopmode` 0-3, or None if unset.
+
+    0 = graceful shutdown (ACPI/OS), 1 = hard power off, 2 = hibernate (PRO),
+    3 = automatic (the GUI's default "Stop"). Raises ValueError for anything else.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in _STOPMODE_NAMES:
+        return _STOPMODE_NAMES[text]
+    if text.isdigit() and int(text) in (0, 1, 2, 3):
+        return int(text)
+    raise ValueError(f"Unknown stop mode {value!r}: use 'graceful' (0), 'poweroff' (1), 'hibernate' (2) or 'auto' (3).")
+
+
 async def _loop_node_action(
     lab_path: str,
     nodes: list[tuple[int, str]],
@@ -1973,18 +2006,30 @@ async def start_node(client: EvengClient, lab_path: str, node_id: int | None = N
         return await _loop_node_action(lab_path, nodes, client.start_node, "started")
 
 
-async def stop_node(client: EvengClient, lab_path: str, node_id: int | None = None) -> dict[str, Any]:
+async def stop_node(
+    client: EvengClient,
+    lab_path: str,
+    node_id: int | None = None,
+    stopmode: str | int | None = None,
+) -> dict[str, Any]:
     """Stop one node, or every node in the lab if `node_id` is omitted.
 
     Stopping every node loops through each one individually rather than
     using EVE-NG's bulk `/nodes/stop` endpoint -- see `_loop_node_action`
-    for why.
+    for why. `stopmode` (optional): graceful / poweroff / hibernate / auto,
+    or 0-3; omitted = chosen automatically for the server's edition.
     """
+    try:
+        mode = _resolve_stopmode(stopmode)
+    except ValueError as exc:
+        return {"status": "error", "message": f"{exc} Nothing was stopped."}
+    kwargs: dict[str, Any] = {} if mode is None else {"stopmode": mode}
     async with lab_lock(lab_path):
         if node_id is not None:
-            return await client.stop_node(lab_path, node_id)
+            return await client.stop_node(lab_path, node_id, **kwargs)
         nodes = await _all_node_ids_and_names(client, lab_path)
-        return await _loop_node_action(lab_path, nodes, client.stop_node, "stopped")
+        action = client.stop_node if mode is None else functools.partial(client.stop_node, stopmode=mode)
+        return await _loop_node_action(lab_path, nodes, action, "stopped")
 
 
 async def wipe_node(
@@ -2611,7 +2656,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
     if enabled("stop_node"):
 
         @mcp.tool(name="stop_node")
-        async def _stop_node(lab_path: str, node_id: int | None = None) -> dict[str, Any]:
+        async def _stop_node(
+            lab_path: str, node_id: int | None = None, stopmode: str | int | None = None
+        ) -> dict[str, Any]:
             """Stop one node, or every node in the lab if `node_id` is omitted.
 
             Stopping every node loops through each one individually
@@ -2621,8 +2668,17 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             Args:
                 lab_path: REQUIRED on every call. Full path to the .unl lab file.
                 node_id: Node id to stop, or omit to stop all nodes.
+                stopmode: Optional. How to stop, matching the web UI's Stop
+                    menu: "auto" (3, the default "Stop": EVE-NG picks the
+                    best method for the node), "graceful" (0, ACPI/OS
+                    shutdown; only for guests that support it), "poweroff"
+                    (1, hard power off, e.g. Cisco routers), "hibernate"
+                    (2, PRO only: saves state). Omit it: the right form is
+                    chosen for the server's edition. On EVE-NG PRO the
+                    request must carry a stopmode or EVE-NG refuses it with
+                    "Request not valid (60027)"; this is handled for you.
             """
-            return await stop_node(await get_client(), lab_path, node_id)
+            return await stop_node(await get_client(), lab_path, node_id, stopmode)
 
     if enabled("wipe_node"):
 

@@ -91,7 +91,7 @@ answer `401` when it is not):
 - session gone (the invalidated-by-another-login case above) → one relogin and
   one retry;
 - session still alive → the `400` is a genuine rejection of that request
-  (an invalid template name, or `stop` refused on a stuck node). It is raised
+  (an invalid template name, or a node action EVE-NG refuses). It is raised
   immediately with **no relogin**: logging in cannot fix it, costs a couple of
   seconds, and, because EVE-NG allows one session per user, would log the
   same account out of the web GUI and any other client;
@@ -574,6 +574,17 @@ stranded lock is a `.lock` file on the EVE-NG host; `get_lab`'s `lock`
 field (the lab file's GUI-editing attribute) read `0` during every
 observed strand, so it is a different thing, and no EVE-NG API endpoint
 that releases the file lock has been confirmed.
+
+**`stop_node` and `stopmode` (EVE-NG PRO).** PRO refuses the documented
+single-node `GET .../nodes/{id}/stop` with HTTP 400 `"Request not valid
+(60027)."`; it only accepts the form the web UI sends,
+`.../nodes/{id}/stop/stopmode={N}`. The client picks the right form for the
+server's edition automatically (`stopmode=3` on PRO, plain on Community),
+tries the other once if refused, and remembers what worked. `stopmode`
+values, as in the UI's Stop menu: `0` graceful shutdown (ACPI/OS, only for
+guests that support it), `1` hard power off, `2` hibernate (PRO), `3`
+automatic (the default "Stop"). `stop_node` accepts `stopmode` as one of
+`graceful`, `poweroff`, `hibernate`, `auto` or `0`-`3`.
 
 **`start_node`/`stop_node`, when `node_id` is omitted (every node in the
 lab), loop through each node individually rather than using EVE-NG's bulk

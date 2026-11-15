@@ -2999,3 +2999,72 @@ async def test_edit_lab_node_accepts_integer_config_and_sends_string() -> None:
     await nodes.edit_lab_node(client, "/User1/Lab 1.unl", 1, config=0)
 
     assert client.edit_lab_node.await_args.kwargs["config"] == "0"
+
+
+# -- stop_node stopmode -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("auto", 3),
+        ("Graceful", 0),
+        ("shutdown", 0),
+        ("poweroff", 1),
+        ("power off", 1),
+        ("hibernate", 2),
+        (3, 3),
+        ("1", 1),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_resolve_stopmode(given: str | int | None, expected: int | None) -> None:
+    assert nodes._resolve_stopmode(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["fast", 4, "-1", "7"])
+def test_resolve_stopmode_rejects_unknown(bad: str | int) -> None:
+    with pytest.raises(ValueError, match="Unknown stop mode"):
+        nodes._resolve_stopmode(bad)
+
+
+async def test_stop_node_default_passes_no_stopmode() -> None:
+    client = AsyncMock()
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", 3)
+
+    client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 3)
+
+
+async def test_stop_node_passes_resolved_stopmode() -> None:
+    client = AsyncMock()
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", 3, stopmode="poweroff")
+
+    client.stop_node.assert_awaited_once_with("/User1/Lab 1.unl", 3, stopmode=1)
+
+
+async def test_stop_node_invalid_stopmode_stops_nothing() -> None:
+    client = AsyncMock()
+
+    result = await nodes.stop_node(client, "/User1/Lab 1.unl", 3, stopmode="fast")
+
+    assert result["status"] == "error"
+    assert "Nothing was stopped" in result["message"]
+    client.stop_node.assert_not_awaited()
+
+
+async def test_stop_all_nodes_passes_stopmode_to_each_node() -> None:
+    client = AsyncMock()
+    client.list_lab_nodes.return_value = {
+        "status": "success",
+        "data": {"1": {"id": 1, "name": "R1"}, "2": {"id": 2, "name": "R2"}},
+    }
+    client.stop_node.return_value = {"status": "success"}
+
+    await nodes.stop_node(client, "/User1/Lab 1.unl", stopmode=0)
+
+    assert [c.kwargs for c in client.stop_node.await_args_list] == [{"stopmode": 0}, {"stopmode": 0}]

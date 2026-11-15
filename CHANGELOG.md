@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-11-15
+
+### Fixed
+- **`stop_node` (and every tool that stops a node first) failed on EVE-NG PRO
+  with `Request not valid (60027)`.** PRO's single-node stop only accepts the
+  form the web UI itself sends, `GET /api/labs/<lab>/nodes/<id>/stop/stopmode=3`,
+  and refuses the documented plain `.../stop` with HTTP 400 while `start`
+  works on the same session (confirmed live on PRO 7.2.0-18 with the exact
+  request the UI sends; the same refusal is reported on other PRO versions).
+  The client now sends `.../stop/stopmode=3` on PRO and plain `.../stop` on
+  Community. If the first form is refused with the generic 400, the other is
+  tried once, and the one that worked is remembered. This also fixes the
+  stop step inside `edit_lab_node`, `change_node_delay`,
+  `edit_lab_nodes_by_template`, `wipe_node` flows and `connect_interface`
+  on Community.
+
+### Added
+- `stop_node` takes an optional `stopmode`: `auto`/3 (the UI's default
+  "Stop"), `graceful`/0 (ACPI/OS shutdown), `poweroff`/1 (hard power off),
+  `hibernate`/2 (PRO). An explicit value is sent exactly as given. Unknown
+  values are refused before anything is sent.
+
+### Notes
+- Stopping every node (`node_id` omitted) still loops per node; the bulk
+  `/nodes/stop` endpoint is unchanged and unused.
+
 ## [0.9.9] - 2026-11-15
 
 ### Fixed
@@ -22,9 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `400` bodies that say `unauthorized`, `401` and `412` are unaffected.
 
 ### Notes
-- This does **not** fix the underlying `60027` refusal of `stop` on some
-  nodes (see README "Known issues"); it makes that failure fast and stops it
-  disturbing other sessions.
+- This did not fix the underlying `60027` refusal of `stop`; that was the
+  missing `stopmode`, fixed in 0.9.10. It makes any genuine 400 fast and
+  stops it disturbing other sessions.
 
 ## [0.9.8] - 2026-11-15
 

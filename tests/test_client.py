@@ -350,7 +350,7 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
     # must trigger exactly one relogin-and-retry.
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
         status_code=400,
         json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
     )
@@ -368,13 +368,13 @@ async def test_generic_400_fail_also_triggers_one_relogin_retry(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
-        json={"code": 200, "status": "success", "message": "Node stopped (80051)."},
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
+        json={"code": 200, "status": "success", "message": "Node wiped (80052)."},
     )
 
-    result = await client.stop_node("/User1/Lab 1.unl", 3)
+    result = await client.wipe_node("/User1/Lab 1.unl", 3)
 
-    assert result["message"] == "Node stopped (80051)."
+    assert result["message"] == "Node wiped (80052)."
 
 
 async def test_genuine_400_does_not_relogin_when_session_alive(
@@ -410,7 +410,7 @@ async def test_400_when_session_probe_fails_still_relogins(
     # errors), fall back to the old behaviour: one relogin and retry.
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
         status_code=400,
         json={"code": 60027, "status": "fail", "message": "Request not valid (60027)."},
     )
@@ -422,13 +422,13 @@ async def test_400_when_session_probe_fails_still_relogins(
     )
     httpx_mock.add_response(
         method="GET",
-        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/stop",
-        json={"code": 200, "status": "success", "message": "Node stopped (80051)."},
+        url=f"{base_url}/labs/User1/Lab%201.unl/nodes/3/wipe",
+        json={"code": 200, "status": "success", "message": "Node wiped (80052)."},
     )
 
-    result = await client.stop_node("/User1/Lab 1.unl", 3)
+    result = await client.wipe_node("/User1/Lab 1.unl", 3)
 
-    assert result["message"] == "Node stopped (80051)."
+    assert result["message"] == "Node wiped (80052)."
 
 
 async def test_ensure_authenticated_only_logs_in_once(
@@ -1021,3 +1021,92 @@ async def test_session_killed_by_another_login_still_recovers_with_one_relogin(e
 
     assert eve.logins == 2  # ours at start + one relogin; not one per request
     await http.aclose()
+
+
+# -- single-node stop: PRO needs `/stop/stopmode=N`, Community takes plain `/stop` ----
+
+_LAB = "/User1/Lab 1.unl"
+_STOP = "labs/User1/Lab%201.unl/nodes/3/stop"
+_PRO = {"code": 200, "status": "success", "data": {"version": "7.2.0-18-PRO"}}
+_COMM = {"code": 200, "status": "success", "data": {"version": "6.2.0-4"}}
+_OK = {"code": 200, "status": "success", "message": "Node stopped (80051)."}
+_REFUSED = {"code": 400, "status": "fail", "message": "Request not valid (60027)."}
+_ALIVE = {"code": 200, "status": "success", "message": "User checked (90019)."}
+
+
+def _stop_urls(httpx_mock: HTTPXMock) -> list[str]:
+    return [r.url.raw_path.decode().split("/api/")[-1] for r in httpx_mock.get_requests() if "/nodes/" in r.url.path]
+
+
+async def test_stop_node_on_pro_uses_stopmode_form(client: EvengClient, base_url: str, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_PRO)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+
+    assert (await client.stop_node(_LAB, 3))["message"] == "Node stopped (80051)."
+    assert _stop_urls(httpx_mock) == [f"{_STOP}/stopmode=3"]
+
+
+async def test_stop_node_on_community_uses_plain_stop(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_COMM)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", json=_OK)
+
+    await client.stop_node(_LAB, 3)
+
+    assert _stop_urls(httpx_mock) == [_STOP]
+
+
+async def test_stop_node_falls_back_to_other_form_and_remembers_it(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    # Edition says Community, but this server wants stopmode (e.g. a newer build): one fallback, then remembered.
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_COMM)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)  # genuine 400: no relogin
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", json=_OK)
+
+    await client.stop_node(_LAB, 3)
+    await client.stop_node(_LAB, 3)  # goes straight to the form that worked, no status call, no failure
+
+    assert _stop_urls(httpx_mock) == [_STOP, f"{_STOP}/stopmode=3", f"{_STOP}/stopmode=3"]
+    assert sum(1 for r in httpx_mock.get_requests() if r.url.path.endswith("/status")) == 1
+
+
+async def test_stop_node_both_forms_refused_raises_the_preferred_forms_error(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/status", json=_PRO)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=3", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}", status_code=400, json=_REFUSED)
+    httpx_mock.add_response(method="GET", url=f"{base_url}/auth", json=_ALIVE)
+
+    with pytest.raises(EvengAPIError, match="60027"):
+        await client.stop_node(_LAB, 3)
+
+
+async def test_stop_node_explicit_stopmode_is_sent_as_given(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/{_STOP}/stopmode=1", json=_OK)  # no /status lookup
+
+    await client.stop_node(_LAB, 3, stopmode=1)
+
+    assert _stop_urls(httpx_mock) == [f"{_STOP}/stopmode=1"]
+
+
+async def test_stop_node_rejects_invalid_stopmode(client: EvengClient) -> None:
+    with pytest.raises(ValueError, match="stopmode"):
+        await client.stop_node(_LAB, 3, stopmode=7)
+
+
+async def test_stop_node_without_node_id_still_uses_bulk_endpoint(
+    client: EvengClient, base_url: str, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(method="GET", url=f"{base_url}/labs/User1/Lab%201.unl/nodes/stop", json=_OK)
+
+    await client.stop_node(_LAB)
+
+    assert _stop_urls(httpx_mock) == ["labs/User1/Lab%201.unl/nodes/stop"]
