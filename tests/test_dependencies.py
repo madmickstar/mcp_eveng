@@ -119,3 +119,62 @@ async def test_lab_lock_reuses_the_same_lock_object_for_the_same_path() -> None:
     async with deps.lab_lock("/reuse.unl"):
         pass
     assert deps._lab_locks["/reuse.unl"] is first_lock
+
+
+# -- closing from a different event loop than the connections were opened on ---------
+
+
+def _client_with_pooled_connection_on_a_dead_loop():
+    """An EvengClient whose pool holds a live keep-alive connection bound to an event loop that has since closed."""
+    import asyncio
+
+    import httpx
+
+    from mcp_eveng.client import EvengClient
+
+    async def handler(reader, writer) -> None:  # noqa: ANN001
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: application/json\r\n\r\n{}")
+        await writer.drain()
+        await asyncio.sleep(30)  # keep the connection open (keep-alive)
+
+    async def open_connection() -> httpx.AsyncClient:
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        http = httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}")
+        await http.get("/x")
+        return http
+
+    http = asyncio.run(open_connection())  # that loop is now closed, like after Ctrl+C
+    assert len(http._transport._pool.connections) == 1  # type: ignore[attr-defined]
+    return EvengClient.__new__(EvengClient), http
+
+
+def test_close_client_from_a_new_loop_does_not_raise_event_loop_is_closed(monkeypatch) -> None:
+    """Regression: `anyio.run(close_client)` after Ctrl+C raised `RuntimeError: Event loop is closed`."""
+    import anyio
+
+    shell, http = _client_with_pooled_connection_on_a_dead_loop()
+
+    async def real_aclose() -> None:
+        await http.aclose()
+
+    shell.aclose = real_aclose  # type: ignore[method-assign]
+    monkeypatch.setattr(deps, "_client", shell)
+
+    anyio.run(deps.close_client)  # must not raise
+
+    assert deps._client is None
+
+
+async def test_close_client_still_raises_unrelated_runtime_errors(monkeypatch) -> None:
+    class FakeClient:
+        async def aclose(self) -> None:
+            raise RuntimeError("something else broke")
+
+    monkeypatch.setattr(deps, "_client", FakeClient())
+
+    with pytest.raises(RuntimeError, match="something else broke"):
+        await deps.close_client()
+
+    assert deps._client is None  # dropped regardless, so shutdown is never retried forever

@@ -662,6 +662,17 @@ confirmation lists every user about to be newly added; reply **"accept"
 or "yes"** (`confirm`) — same wording as every delete tool, kept
 consistent.
 
+**`create_lab` / `edit_lab` can share too (PRO, 0.11.0).** `share_with`
+(both tools) and `unshare_with` (`edit_lab`) take usernames — a list or one
+comma-separated string. Each name is matched case-insensitively: an exact
+match proceeds with no prompt; several matches (or none) never guess —
+sharing is left unchanged, the lab is still created/edited, and the result
+lists the numbered matches so the agent can re-call with the exact username
+(no reply = no sharing change). `unshare_with` matches against the lab's
+*current* shares; `"all"` clears them. Existing shares are kept unless
+explicitly removed, and on Community the request is refused before anything
+is created. `share_lab` remains for the interactive search/confirm flow.
+
 **`open_lab` vs `edit_lab`**: `open_lab(name)` is read-only — it looks a
 lab up by a loose path/name fragment (same substring matching as
 `delete_lab`), reports whether it's locked (by name, e.g. `"Lab

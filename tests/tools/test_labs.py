@@ -840,3 +840,150 @@ async def test_satellite_matches_custom_names_from_live_list() -> None:
     await labs.create_lab(client, "/User1", "x", satellite="lab-east")
 
     assert client.create_lab.await_args.kwargs["sat"] == "7"
+
+
+# -- create_lab / edit_lab: share_with / unshare_with -------------------------
+
+
+def _share_client(existing: tuple[str, ...] = (), *users: str) -> AsyncMock:
+    client = _pro_client(
+        create_lab={"status": "success", "message": "Lab created."},
+        edit_lab={"status": "success", "message": "Lab saved."},
+        list_users=_users_data(*(users or ("alice", "alice2", "bob"))),
+    )
+    client.get_lab.return_value = _lab_with_shared(*existing)
+    return client
+
+
+async def test_create_lab_share_exact_match_no_prompt() -> None:
+    client = _share_client()
+    client.get_lab.return_value = _lab_with_shared("alice")
+
+    result = await labs.create_lab(client, "/User1", "L", share_with="alice")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=["alice"])
+    assert result["sharing"]["added"] == ["alice"]
+    assert "warning" not in result
+
+
+async def test_create_lab_share_ambiguous_creates_lab_but_prompts_and_skips_share() -> None:
+    client = _share_client()
+
+    result = await labs.create_lab(client, "/User1", "L", share_with="ali")
+
+    client.create_lab.assert_awaited_once()
+    client.edit_lab.assert_not_awaited()
+    assert result["sharing"]["selection_required"] is True
+    assert "1. alice" in result["message"] and "2. alice2" in result["message"]
+
+
+async def test_create_lab_share_exact_beats_longer_partial() -> None:
+    client = _share_client()
+    client.get_lab.return_value = _lab_with_shared("alice")
+
+    await labs.create_lab(client, "/User1", "L", share_with=["ALICE"])
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=["alice"])
+
+
+async def test_create_lab_share_refused_on_community_before_creating() -> None:
+    client = _share_client()
+    client.get_status.return_value = {"status": "success", "data": {"version": "6.2.0-4"}}
+
+    result = await labs.create_lab(client, "/User1", "L", share_with="alice")
+
+    assert result["status"] == "error"
+    client.create_lab.assert_not_awaited()
+
+
+async def test_create_lab_without_share_never_touches_users() -> None:
+    client = _share_client()
+
+    await labs.create_lab(client, "/User1", "L")
+
+    client.list_users.assert_not_awaited()
+    client.get_status.assert_not_awaited()
+
+
+async def test_edit_lab_share_adds_and_keeps_existing() -> None:
+    client = _share_client(("bob",))
+    client.get_lab.side_effect = [_lab_with_shared("bob"), _lab_with_shared("alice", "bob")]
+
+    result = await labs.edit_lab(client, "/User1/L.unl", share_with="alice")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=["alice", "bob"])
+    assert result["sharing"]["added"] == ["alice"]
+
+
+async def test_edit_lab_unshare_removes_only_named_user() -> None:
+    client = _share_client(("alice", "bob"))
+    client.get_lab.side_effect = [_lab_with_shared("alice", "bob"), _lab_with_shared("bob")]
+
+    result = await labs.edit_lab(client, "/User1/L.unl", unshare_with="alice")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=["bob"])
+    assert result["sharing"]["removed"] == ["alice"]
+
+
+async def test_edit_lab_unshare_all_clears_shares() -> None:
+    client = _share_client(("alice", "bob"))
+    client.get_lab.side_effect = [_lab_with_shared("alice", "bob"), _lab_with_shared()]
+
+    await labs.edit_lab(client, "/User1/L.unl", unshare_with="all")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=[])
+
+
+async def test_edit_lab_unshare_user_not_shared_prompts_and_changes_nothing() -> None:
+    client = _share_client(("bob",))
+
+    result = await labs.edit_lab(client, "/User1/L.unl", unshare_with="alice")
+
+    client.edit_lab.assert_not_awaited()
+    assert result["status"] == "selection_required"
+    assert "not currently shared" in result["message"]
+
+
+async def test_edit_lab_ambiguous_share_still_applies_other_fields() -> None:
+    client = _share_client()
+
+    result = await labs.edit_lab(client, "/User1/L.unl", description="d", share_with="ali")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", description="d")
+    assert result["sharing"]["selection_required"] is True
+
+
+async def test_edit_lab_share_and_unshare_same_user_is_error() -> None:
+    client = _share_client(("alice",))
+
+    result = await labs.edit_lab(client, "/User1/L.unl", share_with="alice", unshare_with="alice")
+
+    assert result["status"] == "error"
+    client.edit_lab.assert_not_awaited()
+
+
+async def test_edit_lab_already_shared_is_noop_without_put() -> None:
+    client = _share_client(("alice",))
+
+    result = await labs.edit_lab(client, "/User1/L.unl", share_with="alice")
+
+    client.edit_lab.assert_not_awaited()
+    assert result["status"] == "success"
+
+
+async def test_edit_lab_warns_when_eveng_did_not_store_shares() -> None:
+    client = _share_client(())
+    client.get_lab.side_effect = [_lab_with_shared(), _lab_with_shared()]
+
+    result = await labs.edit_lab(client, "/User1/L.unl", share_with="alice")
+
+    assert "did not apply the sharing change" in result["warning"]
+
+
+async def test_edit_lab_comma_string_shares_several() -> None:
+    client = _share_client()
+    client.get_lab.side_effect = [_lab_with_shared(), _lab_with_shared("alice", "bob")]
+
+    await labs.edit_lab(client, "/User1/L.unl", share_with="alice, bob")
+
+    client.edit_lab.assert_awaited_once_with("/User1/L.unl", shared=["alice", "bob"])

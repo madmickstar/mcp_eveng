@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-18
+
+Unified release combining three independently developed changes made on top
+of 0.9.10 (lab sharing, Ctrl+C shutdown fix, manual capture scripts).
+
+### Added
+- **`create_lab` and `edit_lab` can share a lab (PRO).** New `share_with`
+  argument on both, and `unshare_with` on `edit_lab`, take usernames (list or
+  comma-separated). Names are matched case-insensitively against the server's
+  users (for `unshare_with`: against the lab's current shares; `"all"` clears
+  them). An exact match proceeds with no prompt. Several matches, or none,
+  never guess: sharing is left unchanged and the result lists the matches so
+  the agent can re-call with the exact username (no answer = no sharing
+  change). The lab is still created/edited either way. Existing shares are
+  always preserved except those explicitly removed. The change is written in
+  the same PUT as other edits and re-read to warn if EVE-NG did not store it.
+  Community edition refuses up front, before anything is created or changed.
+  `share_lab` is unchanged.
+- **`scripts/eve-capture-manual.bat` and `scripts/eve-capture-manual.ps1`**:
+  standalone Windows clients that call `list_captures` on a running
+  `--http` server, show the running captures as a numbered list, and print
+  the `capture://` URL for the one you pick (via `get_capture`, by container
+  name), also copying it to the clipboard. The `.bat` uses only `cmd.exe` and
+  `curl.exe`; the `.ps1` needs Windows PowerShell 5.1 or PowerShell 7+. See
+  `docs/capture-relay.md` section 10.
+
+### Fixed
+- **Ctrl+C printed a traceback (`RuntimeError: Event loop is closed`) instead of
+  exiting cleanly (Windows, Python 3.13).** On shutdown the shared EVE-NG HTTP
+  client was closed in a brand-new event loop, but its pooled keep-alive
+  connections belong to the server's own loop, which Ctrl+C had already torn
+  down; closing them then raised, and that error replaced the clean
+  `SystemExit(0)`. (It only bites when a connection is still pooled, i.e. after
+  the server has talked to EVE-NG.) The fix combines both independently
+  developed approaches:
+  - the client is closed on the server's own loop, shielded from cancellation,
+    before that loop ends (`--http`/`--sse`);
+  - `close_client()` drops the singleton before closing it, and tolerates the
+    "Event loop is closed" case (any other error still propagates);
+  - the exit-time close in `run()` (still the real close for stdio) goes through
+    one best-effort helper that can never raise, so Ctrl+C always ends with the
+    "Goodbye!" message and exit code 0.
+
 ## [0.9.10] - 2026-11-15
 
 ### Fixed

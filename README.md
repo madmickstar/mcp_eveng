@@ -390,7 +390,9 @@ mcp-eveng/
 │   ├── mcp-eveng.service  # ready-to-use unit for the main MCP server
 │   └── mcp-relay.service  # ready-to-use unit for the standalone capture-relay service
 ├── scripts/
-│   └── eve-capture.bat    # Windows capture:// protocol handler companion
+│   ├── eve-capture.bat           # Windows capture:// protocol handler companion
+│   ├── eve-capture-manual.bat    # list/pick a running capture, print its capture:// URL (cmd + curl only)
+│   └── eve-capture-manual.ps1    # same, in PowerShell (see docs/capture-relay.md section 10)
 ├── tests/
 │   ├── conftest.py
 │   ├── test_*.py

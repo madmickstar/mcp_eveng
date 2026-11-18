@@ -114,6 +114,156 @@ async def get_lab(client: EvengClient, lab_path: str) -> dict[str, Any]:
     return await client.get_lab(lab_path)
 
 
+# -- sharing arguments shared by create_lab / edit_lab (PRO) --------------------
+#
+# `share_with` / `unshare_with` take usernames (list, or one comma-separated
+# string). Each name is matched case-insensitively: an exact match proceeds with
+# no prompt; a single partial match proceeds too; several partial matches (or
+# none) never guess -- the sharing change is skipped and the result lists the
+# matches so the caller can re-run with exact usernames. The lab itself is
+# still created/edited either way.
+
+_PROMPT_LIST_LIMIT = 20
+
+
+def _as_terms(value: str | list[str] | None) -> list[str]:
+    """Normalise a name argument (list or comma-separated string) to unique, non-empty terms."""
+    if value is None:
+        return []
+    items = value.split(",") if isinstance(value, str) else list(value)
+    terms: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text and text.lower() not in {t.lower() for t in terms}:
+            terms.append(text)
+    return terms
+
+
+def _match_names(pool: list[str], terms: list[str]) -> tuple[list[str], dict[str, list[str]], list[str]]:
+    """Match each term against `pool`: returns `(resolved, ambiguous, missing)`.
+
+    Exact (case-insensitive) match wins; otherwise a substring match must hit
+    exactly one name. Several hits -> `ambiguous[term]`; none -> `missing`.
+    """
+    resolved: list[str] = []
+    ambiguous: dict[str, list[str]] = {}
+    missing: list[str] = []
+    for term in terms:
+        low = term.lower()
+        hits = [u for u in pool if u.lower() == low]
+        if len(hits) != 1:
+            hits = [u for u in pool if low in u.lower()]
+        if len(hits) == 1:
+            if hits[0] not in resolved:
+                resolved.append(hits[0])
+        elif hits:
+            ambiguous[term] = hits
+        else:
+            missing.append(term)
+    return resolved, ambiguous, missing
+
+
+def _sharing_prompt(ambiguous: dict[str, list[str]], missing: dict[str, str], retry: str) -> str:
+    lines = ["Sharing NOT changed -- these names need a decision:"]
+    for term, hits in ambiguous.items():
+        shown = hits[:_PROMPT_LIST_LIMIT]
+        more = f" (+{len(hits) - len(shown)} more -- use a more specific name)" if len(hits) > len(shown) else ""
+        lines.append(f"{term!r} matches {len(hits)} users:\n{format_numbered(shown)}{more}")
+    for term, reason in missing.items():
+        lines.append(f"{term!r}: {reason}")
+    lines.append(f"Choose from the list and {retry} with the exact username(s). No reply = no sharing change.")
+    return "\n".join(lines)
+
+
+async def _plan_sharing(
+    client: EvengClient,
+    lab_path: str | None,
+    share_with: str | list[str] | None,
+    unshare_with: str | list[str] | None,
+    retry: str,
+) -> dict[str, Any] | None:
+    """Work out a lab's new `shared` list, read-only. None when no sharing was asked for.
+
+    Returns `{"error": msg}` (nothing should be sent), or
+    `{"final", "added", "removed", "prompt"}`: `final` is the full list to
+    write (None = leave sharing alone), `prompt` a selection message (or None).
+    `lab_path=None` means a lab that doesn't exist yet (no current shares).
+    """
+    add_terms, remove_terms = _as_terms(share_with), _as_terms(unshare_with)
+    if not add_terms and not remove_terms:
+        return None
+    status = await client.get_status()
+    status_data = status.get("data") if isinstance(status, dict) else None
+    if not is_pro_edition(status_data if isinstance(status_data, dict) else {}):
+        return {"error": "Lab sharing is a PRO-only EVE-NG feature; this server is Community edition."}
+    try:
+        users = await _list_usernames(client)
+        existing = [] if lab_path is None else await _current_shared_users(client, lab_path)
+    except Exception as exc:  # noqa: BLE001 -- e.g. a non-admin account cannot list users
+        return {"error": f"Could not read the user list / current shares ({exc})."}
+    if not users:
+        return {"error": "No users found on this server."}
+
+    added, amb_add, miss_add = _match_names(users, add_terms)
+    removed: list[str]
+    amb_rm: dict[str, list[str]] = {}
+    miss_rm: list[str] = []
+    if [t.lower() for t in remove_terms] == ["all"]:
+        removed = list(existing)
+    else:
+        removed, amb_rm, miss_rm = _match_names(existing, remove_terms)
+    if set(added) & set(removed):
+        return {"error": "The same user is in both share_with and unshare_with."}
+
+    ambiguous = {**amb_add, **amb_rm}
+    missing = {t: "no user matches this name." for t in miss_add}
+    missing.update({t: "not currently shared with this lab." for t in miss_rm})
+    if ambiguous or missing:
+        return {"final": None, "added": [], "removed": [], "prompt": _sharing_prompt(ambiguous, missing, retry)}
+
+    new = [u for u in added if u not in existing]
+    gone = [u for u in removed if u in existing]
+    final = sorted((set(existing) | set(new)) - set(gone)) if (new or gone) else None
+    return {"final": final, "added": new, "removed": gone, "prompt": None}
+
+
+def _sharing_summary(plan: dict[str, Any]) -> str:
+    if plan["prompt"]:
+        return plan["prompt"]
+    parts = []
+    if plan["added"]:
+        parts.append(f"shared with {', '.join(plan['added'])}")
+    if plan["removed"]:
+        parts.append(f"unshared from {', '.join(plan['removed'])}")
+    return ("Sharing: " + "; ".join(parts) + ".") if parts else "Sharing: no change needed."
+
+
+async def _verify_shared(client: EvengClient, lab_path: str, expected: list[str], result: dict[str, Any]) -> None:
+    """Re-read the lab and warn (never raise) if EVE-NG did not store the shared list."""
+    try:
+        actual = sorted(await _current_shared_users(client, lab_path))
+    except Exception as exc:  # noqa: BLE001 -- verification is best-effort
+        _join_warnings(result, f"Could not re-read the lab to confirm its sharing: {exc}")
+        return
+    if actual != sorted(expected):
+        _join_warnings(
+            result,
+            f"EVE-NG did not apply the sharing change: expected shared={sorted(expected)}, "
+            f"but the lab reports {actual}.",
+        )
+
+
+def _attach_sharing(result: dict[str, Any], plan: dict[str, Any]) -> None:
+    summary = _sharing_summary(plan)
+    result["sharing"] = {
+        "added": plan["added"],
+        "removed": plan["removed"],
+        "selection_required": bool(plan["prompt"]),
+    }
+    base = result.get("message")
+    result["message"] = f"{base} {summary}" if base else summary
+
+
 async def create_lab(
     client: EvengClient,
     path: str,
@@ -123,21 +273,32 @@ async def create_lab(
     description: str = "",
     body: str = "",
     satellite: str | int | None = None,
+    share_with: str | list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a new (empty) lab, optionally on a specific satellite (PRO clusters)."""
+    """Create a new (empty) lab, optionally on a satellite and shared with users (PRO)."""
     try:
         sat, sat_warning = await _resolve_satellite_live(client, satellite)
     except ValueError as exc:
         return {"status": "error", "message": f"{exc} Nothing was created."}
-    if sat is None:
-        return await client.create_lab(path, name, version=version, author=author, description=description, body=body)
-    result = await client.create_lab(
-        path, name, version=version, author=author, description=description, body=body, sat=sat
-    )
+    lab_path = f"{path.rstrip('/')}/{name}.unl"
+    plan = await _plan_sharing(client, None, share_with, None, f'call edit_lab(lab_path="{lab_path}", share_with=...)')
+    if plan and plan.get("error"):
+        return {"status": "error", "message": f"{plan['error']} Nothing was created."}
+    fields: dict[str, Any] = {"version": version, "author": author, "description": description, "body": body}
+    if sat is not None:
+        fields["sat"] = sat
+    result = await client.create_lab(path, name, **fields)
     if result.get("status") != "success":
         return result
-    lab_path = f"{path.rstrip('/')}/{name}.unl"
-    return _join_warnings(await _verify_satellite(client, lab_path, sat, result), sat_warning)
+    if sat is not None:
+        await _verify_satellite(client, lab_path, sat, result)
+        _join_warnings(result, sat_warning)
+    if plan:
+        if plan["final"] is not None:
+            await client.edit_lab(lab_path, shared=plan["final"])
+            await _verify_shared(client, lab_path, plan["final"], result)
+        _attach_sharing(result, plan)
+    return result
 
 
 async def edit_lab(
@@ -149,13 +310,20 @@ async def edit_lab(
     description: str | None = None,
     body: str | None = None,
     satellite: str | int | None = None,
+    share_with: str | list[str] | None = None,
+    unshare_with: str | list[str] | None = None,
 ) -> dict[str, Any]:
-    """Edit an existing lab's metadata. Only supplied fields are changed."""
+    """Edit an existing lab's metadata and (PRO) add/remove shared users. Only supplied fields change."""
     try:
         sat, sat_warning = await _resolve_satellite_live(client, satellite)
     except ValueError as exc:
         return {"status": "error", "message": f"{exc} Nothing was changed."}
     async with lab_lock(lab_path):
+        plan = await _plan_sharing(
+            client, lab_path, share_with, unshare_with, f'call edit_lab(lab_path="{lab_path}", ...)'
+        )
+        if plan and plan.get("error"):
+            return {"status": "error", "message": f"{plan['error']} Nothing was changed."}
         fields = {
             k: v
             for k, v in {
@@ -168,10 +336,25 @@ async def edit_lab(
             }.items()
             if v is not None
         }
+        if plan and plan["final"] is not None:
+            fields["shared"] = plan["final"]
+        if plan and not fields:
+            return {
+                "status": "success" if not plan["prompt"] else "selection_required",
+                "message": _sharing_summary(plan),
+            }
         result = await client.edit_lab(lab_path, **fields)
-        if sat is None or name is not None or result.get("status") != "success":
+        if result.get("status") != "success":
             return result
-        return _join_warnings(await _verify_satellite(client, lab_path, sat, result), sat_warning)
+        if name is None:
+            if sat is not None:
+                await _verify_satellite(client, lab_path, sat, result)
+                _join_warnings(result, sat_warning)
+            if plan and plan["final"] is not None:
+                await _verify_shared(client, lab_path, plan["final"], result)
+        if plan:
+            _attach_sharing(result, plan)
+        return result
 
 
 # -- share_lab: add users to a lab's `shared` list, via edit_lab ---------------
@@ -597,8 +780,9 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             description: str = "",
             body: str = "",
             satellite: str | int | None = None,
+            share_with: str | list[str] | None = None,
         ) -> dict[str, Any]:
-            """Create a new (empty) lab, optionally on a specific satellite (PRO clusters).
+            """Create a new (empty) lab, optionally on a specific satellite and shared with users (PRO).
 
             Args:
                 path: Destination folder, e.g. "/User1".
@@ -615,6 +799,14 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                     is created. Omit to let EVE-NG use its default ("any").
                     The result carries a `warning` if EVE-NG did not store
                     the requested value or the satellite is offline.
+                share_with: PRO only. Username(s) to share the new lab with
+                    (list, or one comma-separated string). Each name is matched
+                    case-insensitively against the server's users: an exact
+                    match proceeds with no prompt; several matches (or none)
+                    return a numbered list in the result and sharing is left
+                    unchanged -- the lab is still created; follow up with
+                    `edit_lab(share_with=<exact username>)`. Refused on
+                    Community (nothing is created).
             """
             return await create_lab(
                 await get_client(),
@@ -625,6 +817,7 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 description=description,
                 body=body,
                 satellite=satellite,
+                share_with=share_with,
             )
 
     if enabled("edit_lab"):
@@ -638,8 +831,10 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
             description: str | None = None,
             body: str | None = None,
             satellite: str | int | None = None,
+            share_with: str | list[str] | None = None,
+            unshare_with: str | list[str] | None = None,
         ) -> dict[str, Any]:
-            """Edit an existing lab's metadata. Only supplied fields are changed.
+            """Edit an existing lab's metadata and (PRO) add/remove shared users. Only supplied fields are changed.
 
             Args:
                 lab_path: REQUIRED on every call. Full path to the .unl lab file.
@@ -653,6 +848,15 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                     against the cluster's live list (see `list_satellites`).
                     The result carries a `warning` if EVE-NG did not store it
                     or the satellite is offline.
+                share_with: PRO only. Username(s) to ADD to the lab's shared
+                    list (list, or one comma-separated string); existing
+                    shares are kept. Exact (case-insensitive) match proceeds
+                    with no prompt; several matches (or none) return a
+                    numbered list and sharing is left unchanged -- re-call
+                    with the exact username. Other fields are still applied.
+                unshare_with: PRO only. Username(s) to REMOVE from the lab's
+                    shared list, matched against who it is currently shared
+                    with the same way. "all" removes every share.
             """
             return await edit_lab(
                 await get_client(),
@@ -663,6 +867,8 @@ def register(mcp: FastMCP, get_client: GetClient, enabled: Callable[[str], bool]
                 description=description,
                 body=body,
                 satellite=satellite,
+                share_with=share_with,
+                unshare_with=unshare_with,
             )
 
     if enabled("share_lab"):

@@ -16,6 +16,7 @@ own GUI already generates working `capture://` links.
 - [7. Start the relay manually (any OS, including Windows)](#7-start-the-relay-manually-any-os-including-windows)
 - [8. Enable the tools on the main mcp-eveng process](#8-enable-the-tools-on-the-main-mcp-eveng-process)
 - [9. The `.bat` companion and Windows registration](#9-the-bat-companion-and-windows-registration)
+- [10. Picking a capture without an LLM (`eve-capture-manual`)](#10-picking-a-capture-without-an-llm-eve-capture-manual)
 - [Known limitations](#known-limitations)
 
 ## Architecture
@@ -263,6 +264,31 @@ Adjust the path to wherever `eve-capture.bat` lives, then import the
 
 See [Upgrading](upgrading.md) for updating an existing install of
 either app.
+
+## 10. Picking a capture without an LLM (`eve-capture-manual`)
+
+Two small client scripts in `scripts/` talk to the running mcp-eveng
+server (started with `--http`) directly, so you can get a `capture://` URL
+without an MCP host. Both do the same thing: call `list_captures`, show the
+running captures as a numbered list, ask which one you want, call
+`get_capture` for it, and print the URL to paste into your browser (it is
+also copied to the clipboard).
+
+| Script | Needs | Notes |
+|---|---|---|
+| `scripts/eve-capture-manual.bat` | `cmd.exe` + `curl.exe` only | No PowerShell. Reads the JSON with plain string handling, so it depends on the current reply layout, and `cmd.exe`'s ~8,000-character line limit caps the list at roughly 17 captures. |
+| `scripts/eve-capture-manual.ps1` | Windows PowerShell 5.1 or PowerShell 7+ | Parses the JSON properly; no such limit. |
+
+Settings: edit the `MCP_URL` / `API_KEY` lines at the top of the `.bat`, or
+pass `-McpUrl` / `-ApiKey` (default: `$env:MCP_API_KEY`) to the `.ps1`
+(`-SkipCertCheck` for a self-signed HTTPS cert, PowerShell 7+). Use
+`localhost` in the URL, not `127.0.0.1`, unless `MCP_ALLOWED_HOSTS`
+includes the IP. `list_captures` and `get_capture` must be enabled in
+`tools.env` (step 8). The URL is a one-time token valid for
+`CAPTURE_TOKEN_TTL_SECONDS`, so paste it promptly.
+
+Keep `eve-capture-manual.bat` saved with CRLF line endings; `cmd.exe` can
+misread labels in LF-only batch files.
 
 ## Known limitations
 

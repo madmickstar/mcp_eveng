@@ -256,9 +256,27 @@ def _run_networked(mcp: FastMCP, settings: MCPTransportSettings, transport: Tran
 
     async def serve() -> None:
         _install_connection_reset_filter(asyncio.get_running_loop())
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            # Close the shared EVENG client HERE, on the loop that opened its
+            # keep-alive (TLS) connections. Closing it after `anyio.run()` has
+            # returned means a brand-new loop tries to close sockets owned by
+            # the old, already-closed one, which raises "Event loop is closed"
+            # on Windows/Python 3.13 (seen on Ctrl+C). Shielded so a Ctrl+C
+            # cancellation can't interrupt the close.
+            with anyio.CancelScope(shield=True):
+                await _close_client_quietly()
 
     anyio.run(serve)
+
+
+async def _close_client_quietly() -> None:
+    """Close the shared client; shutdown must never fail because a socket won't close cleanly."""
+    try:
+        await close_client()
+    except Exception:  # noqa: BLE001 -- best effort at process exit
+        logger.debug("Ignoring error while closing the EVENG client at shutdown.", exc_info=True)
 
 
 def run(transport: Transport = "stdio") -> None:
@@ -306,4 +324,8 @@ def run(transport: Transport = "stdio") -> None:
         # `lifespan=` parameter; see the comment on `ToolCallLoggingFastMCP(...)`
         # in `create_server()` above for why that would be actively harmful
         # (it's scoped per connection/session/request, not per process).
-        anyio.run(close_client)
+        # Already closed on the server's own loop for --sse/--http (making
+        # this a no-op); stdio's loop lives inside FastMCP, so this is its
+        # only chance. Never raises: a leftover socket tied to a dead loop
+        # must not turn a clean Ctrl+C into a traceback.
+        anyio.run(_close_client_quietly)
